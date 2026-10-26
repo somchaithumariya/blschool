@@ -1,0 +1,94 @@
+<script>
+/**
+ * ใช้งานบนมือถือแบบแอป: แถบเมนูลัดด้านล่าง, โหมดแอป (?app=1 หรือเปิดจากไอคอนบนหน้าจอหลัก) ที่ไปหน้าเข้าสู่ระบบทันที
+ * และอุ่นระบบเบื้องหลังหลังเข้าสู่ระบบ ให้หน้าถัดไปเปิดเร็วขึ้น
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+  const boot = window.__BOOT__ || {};
+  const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+  const appMode = boot.appMode === true || standalone;
+  App.appMode = appMode;
+
+  // ---------- โหมดแอป: หน้าเข้าสู่ระบบเต็มจอ ไม่มีหน้าประชาสัมพันธ์ ----------
+  function ensureLogin() {
+    const view = document.getElementById('login-view');
+    const dialog = document.getElementById('login-dialog');
+    if (!view || !dialog || view.classList.contains('hidden')) return;
+    if (!dialog.open) { try { dialog.showModal(); } catch (error) { dialog.setAttribute('open', ''); } }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    if (appMode) {
+      document.body.classList.add('app-mode');
+      const note = document.getElementById('login-app-note');
+      if (note) {
+        note.classList.remove('hidden');
+        const school = document.createElement('p');
+        school.className = 'login-app-school';
+        school.textContent = App.state.settings.schoolName || '';
+        document.getElementById('login-card-title').before(school);
+      }
+      const remember = document.getElementById('remember-login');
+      if (remember) remember.checked = true;
+      const dialog = document.getElementById('login-dialog');
+      if (dialog) dialog.addEventListener('cancel', (event) => event.preventDefault());
+      const view = document.getElementById('login-view');
+      if (view) new MutationObserver(ensureLogin).observe(view, { attributes: true, attributeFilter: ['class'] });
+      setTimeout(ensureLogin, 0);
+    }
+    const nav = document.getElementById('bottom-nav');
+    if (nav) nav.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-bn]');
+      if (!button) return;
+      if (button.dataset.bn === 'menu') document.getElementById('menu-button').click();
+      else if (button.dataset.bn === 'sos' && App.openSos) App.openSos();
+    });
+  });
+
+  // ---------- แถบเมนูลัดด้านล่าง (แสดงเฉพาะจอเล็ก) ----------
+  function shortcuts() {
+    const has = (key) => App.state.modules.find((module) => module.key === key);
+    const list = [has('dashboard'), has('app-center')];
+    const work = has('checkin') || has('attendance') || has('homeroom');
+    if (work) list.push(work);
+    const second = [has('attendance'), has('student-care'), has('announcements')].find((module) => module && module !== work);
+    if (second) list.push(second);
+    return list.filter(Boolean).slice(0, 4);
+  }
+  const SHORT_NAMES = { dashboard: 'หน้าหลัก', 'app-center': 'แอป', checkin: 'ลงเวลา', attendance: 'เช็กชื่อ', homeroom: 'ที่ปรึกษา',
+    'student-care': 'ดูแลนักเรียน', announcements: 'ประกาศ' };
+
+  function renderBottomNav() {
+    const nav = document.getElementById('bottom-nav');
+    if (!nav || !App.state.user) return;
+    const hash = location.hash || '#/dashboard';
+    nav.innerHTML = shortcuts().map((module) => `<a href="${attr(module.route)}" class="${module.route === hash ? 'active' : ''}">
+        <i class="fa-solid ${attr(module.icon)}"></i><span>${esc(SHORT_NAMES[module.key] || module.name)}</span></a>`).join('')
+      + `<button type="button" data-bn="menu"><i class="fa-solid fa-bars"></i><span>เมนู</span></button>`;
+  }
+
+  // ---------- อุ่นระบบเบื้องหลัง (ไม่เกิน 1 ครั้งต่อ 20 นาทีต่อเครื่อง) ----------
+  let warmed = false;
+  function warmInBackground() {
+    if (warmed) return;
+    warmed = true;
+    let last = 0;
+    try { last = Number(localStorage.getItem(App.storageKey('schoolWarmAt')) || 0); } catch (error) { last = 0; }
+    if (Date.now() - last < 20 * 60 * 1000) return;
+    try { localStorage.setItem(App.storageKey('schoolWarmAt'), String(Date.now())); } catch (error) { /* ignore */ }
+    // รอให้หน้าแรกโหลดเสร็จก่อน จะได้ไม่แย่งการเชื่อมต่อกับหน้าที่ผู้ใช้กำลังเปิด
+    setTimeout(() => App.request('system.warm'), 2500);
+  }
+
+  const previousAfterRoute = App.afterRoute;
+  App.afterRoute = (module) => {
+    if (previousAfterRoute) previousAfterRoute(module);
+    renderBottomNav();
+    warmInBackground();
+  };
+  window.addEventListener('hashchange', renderBottomNav);
+})();
+</script>

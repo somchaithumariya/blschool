@@ -1,0 +1,402 @@
+<script>
+/**
+ * แผนกลยุทธ์ (SWOT) ส่วนที่ 1: แถบขั้นตอน · ประเด็น SWOT/Needs (ตัวช่วย AI) · แบบสอบถาม (ในระบบ + ลิงก์สาธารณะ/QR) · ผลวิเคราะห์ (กราฟไข่แดง + PNI)
+ * สีของ S/W/O/T และ SO/WO/ST/WT ใช้ชุดเดียวกับ 4 ช่องของกราฟไข่แดงทุกหน้า
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const esc = App.esc;
+  const attr = App.attr;
+  const FACTOR = { S: 'จุดแข็ง (S)', W: 'จุดอ่อน (W)', O: 'โอกาส (O)', T: 'อุปสรรค (T)' };
+  const STEPS = [['swot-issues', 'ประเด็น SWOT'], ['needs-items', 'ประเด็น Needs'], ['swot', 'แบบสอบถาม'], ['swot-result', 'ผลวิเคราะห์'],
+    ['tows', 'TOWS'], ['school-direction', 'ทิศทางโรงเรียน'], ['projects', 'โครงการ'], ['project-reports', 'รายงานผล']];
+  const GROUPS = ['ผู้บริหาร', 'ครู', 'บุคลากรทางการศึกษา', 'กรรมการสถานศึกษา', 'ผู้ปกครอง', 'นักเรียน', 'ชุมชน'];
+  const LEVEL_TONE = { 'สูงมาก': 'danger', 'สูง': 'warning', 'ปานกลาง': 'info', 'ต่ำ': 'success', 'บรรลุแล้ว': 'success' };
+
+  // ---------- แถบขั้นตอน (ใช้ทุกหน้าของหมวด) ----------
+  App.strategySteps = (active) => {
+    const visible = new Set((App.state.modules || []).map((module) => module.key));
+    return `<nav class="st-steps no-print" aria-label="ขั้นตอนการวางแผนกลยุทธ์">${STEPS.filter(([key]) => visible.has(key)).map(([key, label]) => {
+      const number = STEPS.findIndex(([item]) => item === key) + 1;
+      return `<a href="#/${key}" class="${key === active ? 'on' : ''}" ${key === active ? 'aria-current="page"' : ''}><span>${number}</span>${esc(label)}</a>`;
+    }).join('')}</nav>`;
+  };
+  // หน้าแบบตาราง: วางแถบขั้นตอนและแผงเครื่องมือไว้เหนือตาราง
+  App.strategyTop = (key, html) => {
+    const section = document.querySelector(`#page-content [data-entity-page="${CSS.escape(key)}"]`);
+    if (!section) return null;
+    const node = document.createElement('div');
+    node.className = 'st-top';
+    node.innerHTML = App.strategySteps(key) + (html || '');
+    section.before(node);
+    return node;
+  };
+  App.factorBadge = (code) => `<span class="st-code f-${attr(String(code).replace(/\d+$/, ''))}">${esc(code)}</span>`;
+
+  // ---------- เลือกกลุ่มผู้ตอบ (ฟอร์มประเด็น) ----------
+  function audiencePicker(form) {
+    const input = form.elements.audiences;
+    if (!input) return;
+    const chosen = new Set(String(input.value || '').split(',').filter(Boolean));
+    input.type = 'hidden';
+    const field = input.closest('label');
+    const wrap = document.createElement('div');
+    wrap.className = 'wide st-aud-field';
+    while (field.firstChild) wrap.appendChild(field.firstChild);
+    field.replaceWith(wrap);
+    const box = document.createElement('div');
+    box.className = 'st-aud';
+    box.innerHTML = GROUPS.map((name) => `<label class="check-row"><input type="checkbox" value="${attr(name)}" ${chosen.has(name) ? 'checked' : ''}> ${esc(name)}</label>`).join('');
+    input.after(box);
+    box.addEventListener('change', () => { input.value = [...box.querySelectorAll('input:checked')].map((item) => item.value).join(','); });
+  }
+
+  App.entityFormReady['swot-issues'] = (form) => {
+    audiencePicker(form);
+    // ช่อง “ใช้ในแบบสอบถาม” ย้ายไปท้ายฟอร์ม (คอลัมน์ในชีตอยู่ก่อนช่องที่เพิ่มภายหลัง)
+    const active = form.elements.isActive && form.elements.isActive.closest('label');
+    const actions = form.querySelector('.form-error') || form.querySelector('.form-actions');
+    if (active && actions) actions.before(active);
+    const question = form.elements.question;
+    if (question) question.placeholder = 'เช่น “ครูในโรงเรียนสอนตรงกับวิชาที่เรียนมา” (ว่าง = ใช้ข้อความประเด็น)';
+  };
+
+  // ประเด็นความต้องการจำเป็น: เลือกประเด็นหลัก/รองจากมาตรฐานที่เลือก
+  App.entityFormReady['needs-items'] = async (form) => {
+    audiencePicker(form);
+    const standards = await ensureStandards();
+    const toSelect = (name) => {
+      const input = form.elements[name];
+      const select = document.createElement('select');
+      select.name = name;
+      if (input.required) select.required = true;
+      select.dataset.value = input.value;
+      input.replaceWith(select);
+      return select;
+    };
+    const main = toSelect('mainIssue');
+    const sub = toSelect('subIssue');
+    const standardOf = () => standards.find((item) => item.name === form.elements.standard.value);
+    const paintMain = () => {
+      const standard = standardOf();
+      main.innerHTML = '<option value="">— เลือก —</option>' + (standard ? standard.issues : []).map((issue) => `<option value="${attr(issue.code)}" ${issue.code === main.dataset.value ? 'selected' : ''}>${esc(issue.code + ' ' + issue.name)}</option>`).join('');
+      paintSub();
+    };
+    const paintSub = () => {
+      const standard = standardOf();
+      const issue = standard && standard.issues.find((item) => item.code === main.value);
+      const subs = issue ? issue.subs : [];
+      sub.innerHTML = '<option value="">' + (subs.length ? '— ใช้ทั้งประเด็นหลัก —' : '— ไม่มีประเด็นรอง —') + '</option>' +
+        subs.map((item) => `<option value="${attr(item.code)}" ${item.code === sub.dataset.value ? 'selected' : ''}>${esc(item.code + ' ' + item.name)}</option>`).join('');
+    };
+    form.elements.standard.addEventListener('change', () => { main.dataset.value = ''; paintMain(); });
+    main.addEventListener('change', () => { sub.dataset.value = ''; paintSub(); const issue = (standardOf() || { issues: [] }).issues.find((item) => item.code === main.value);
+      if (issue && !form.querySelector('[name=item]').value) form.querySelector('[name=item]').value = issue.name; });
+    sub.addEventListener('change', () => { const standard = standardOf(); const issue = standard && standard.issues.find((item) => item.code === main.value);
+      const chosen = issue && issue.subs.find((item) => item.code === sub.value); if (chosen) form.querySelector('[name=item]').value = chosen.name; });
+    paintMain();
+  };
+
+  async function ensureStandards() {
+    if (App.state.qaStandards) return App.state.qaStandards;
+    const response = await App.call('strategy.page', { academicYearId: App.yearIdOrActive() }, { silent: true, quiet: true });
+    App.state.qaStandards = response.ok ? response.data.standards : [];
+    return App.state.qaStandards;
+  }
+  App.ensureQaStandards = ensureStandards;
+
+  // ---------- เมนูประเด็น SWOT / ประเด็น Needs: แถบขั้นตอน + ตัวช่วย ----------
+  App.entityAfter['swot-issues'] = async (container, rows) => {
+    const canEdit = App.can('swot.edit');
+    const ai = canEdit ? await App.aiStatus() : {};
+    const count = (factor) => rows.filter((row) => row.isActive !== false && factorOf(row) === factor).length;
+    const top = App.strategyTop('swot-issues', `<section class="panel st-tools"><div><p>ตั้งประเด็นของแต่ละด้าน 2S4M (ภายใน) และ PEST (ภายนอก) ผู้ตอบให้คะแนนผลกระทบ 1–5
+      ใส่ “คำถามสำหรับผู้ตอบทั่วไป” เพื่อให้ผู้ปกครอง นักเรียน และชุมชนเข้าใจง่าย และเลือกกลุ่มผู้ตอบที่เห็นแต่ละข้อได้</p>
+      <div class="chip-list">${['S', 'W', 'O', 'T'].map((factor) => `<span class="st-code f-${factor}">${esc(FACTOR[factor])} ${count(factor)} ข้อ</span>`).join('')}</div></div>
+      ${canEdit ? `<div class="actions"><button type="button" class="secondary-button" data-ai-issues ${ai.swot ? '' : 'disabled'}><i class="fa-solid fa-wand-magic-sparkles"></i> AI เสนอประเด็น 10 ด้าน</button>
+        <button type="button" class="secondary-button" data-ai-questions ${ai.swot ? '' : 'disabled'}><i class="fa-solid fa-comments"></i> AI เขียนคำถามภาษาง่าย</button>
+        ${ai.swot ? '' : '<small class="muted">ใช้ AI ได้เมื่อผู้ดูแลระบบใส่ API key ของ “AI SWOT และแผนกลยุทธ์”</small>'}</div>` : ''}</section>`);
+    if (!top) return;
+    const issuesButton = top.querySelector('[data-ai-issues]');
+    if (issuesButton) issuesButton.addEventListener('click', aiIssues);
+    const questionsButton = top.querySelector('[data-ai-questions]');
+    if (questionsButton) questionsButton.addEventListener('click', () => aiQuestions('swot'));
+  };
+  function factorOf(row) {
+    const internal = /Structure|Service|Man\)|Money|Materials|Management/.test(row.category);
+    const good = /^เชิงบวก/.test(row.impact);
+    return internal ? (good ? 'S' : 'W') : (good ? 'O' : 'T');
+  }
+
+  App.entityAfter['needs-items'] = async (container, rows) => {
+    const canEdit = App.can('swot.edit');
+    const ai = canEdit ? await App.aiStatus() : {};
+    const top = App.strategyTop('needs-items', `<section class="panel st-tools"><div><p>ประเด็นความต้องการจำเป็นผูกกับมาตรฐาน ประเด็นหลัก (เช่น 1.1) และประเด็นรอง (เช่น 1.1.1)
+      ผู้ตอบให้คะแนน 2 ช่อง คือ <b>สภาพปัจจุบัน (D)</b> และ <b>สภาพที่ควรจะเป็น (I)</b> ระบบจัดลำดับด้วย PNI = (I − D) / D</p>
+      <p class="muted">มี ${rows.length} ข้อ${rows.length ? '' : ' — กด “สร้างจากมาตรฐาน” เพื่อเริ่มจาก 21 ประเด็นของมาตรฐานการศึกษาขั้นพื้นฐาน'}</p></div>
+      ${canEdit ? `<div class="actions"><button type="button" class="primary-button" data-seed><i class="fa-solid fa-layer-group"></i> สร้างจากมาตรฐาน</button>
+        <button type="button" class="secondary-button" data-ai-questions ${ai.swot ? '' : 'disabled'}><i class="fa-solid fa-comments"></i> AI เขียนคำถามภาษาง่าย</button></div>` : ''}</section>`);
+    if (!top) return;
+    const seed = top.querySelector('[data-seed]');
+    if (seed) seed.addEventListener('click', async () => {
+      const result = await App.call('swot.seedNeeds', { academicYearId: App.state.yearId });
+      if (!result.ok) return;
+      App.toast(result.data.created ? 'สร้างแล้ว ' + result.data.created + ' ข้อ' : 'มีครบทุกประเด็นของมาตรฐานแล้ว', 'success');
+      App.reloadEntity('needs-items');
+      App.route();
+    });
+    const questions = top.querySelector('[data-ai-questions]');
+    if (questions) questions.addEventListener('click', () => aiQuestions('needs'));
+  };
+
+  // AI แปลงประเด็นเป็นคำถามภาษาง่าย → ผู้ใช้แก้/เลือกก่อนบันทึก
+  async function aiQuestions(kind) {
+    const body = App.openModal('AI เขียนคำถามภาษาง่าย', '<p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> AI กำลังเขียนคำถาม อาจใช้เวลา 10–40 วินาที…</p>');
+    const response = await App.call('swot.aiQuestions', { academicYearId: App.state.yearId, kind }, { silent: true, quiet: true });
+    if (!body.isConnected) return;
+    if (!response.ok) { body.innerHTML = `<p class="form-error">${esc(App.messageOf(response.error))}</p>`; return; }
+    const items = response.data.items;
+    body.innerHTML = `<p class="muted" style="margin-top:0">ตรวจและแก้ข้อความได้ก่อนบันทึก ยกเลิกเครื่องหมายถูกในข้อที่ไม่ต้องการ</p>
+      <div class="st-review">${items.map((item, index) => `<label class="st-review-row"><input type="checkbox" data-pick="${index}" checked>
+        <span><small class="muted">${esc(item.text)}</small><textarea rows="2" maxlength="300" data-text="${index}">${esc(item.question)}</textarea></span></label>`).join('')}</div>
+      <div class="form-actions"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="button" class="primary-button" data-save><i class="fa-solid fa-floppy-disk"></i> บันทึกคำถาม</button></div>`;
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    body.querySelector('[data-save]').addEventListener('click', async () => {
+      const chosen = items.map((item, index) => ({ id: item.id, question: body.querySelector(`[data-text="${index}"]`).value, on: body.querySelector(`[data-pick="${index}"]`).checked }))
+        .filter((item) => item.on);
+      const saved = await App.call('swot.saveQuestions', { kind, items: chosen });
+      if (!saved.ok) return;
+      App.closeModal();
+      App.toast('บันทึกคำถามแล้ว ' + saved.data.saved + ' ข้อ', 'success');
+      App.reloadEntity(kind === 'needs' ? 'needs-items' : 'swot-issues');
+      App.route();
+    });
+  }
+
+  async function aiIssues() {
+    const body = App.openModal('AI เสนอประเด็น SWOT', '<p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> AI กำลังอ่านข้อมูลโรงเรียนและผลประกันคุณภาพ อาจใช้เวลา 10–40 วินาที…</p>');
+    const response = await App.call('swot.aiIssues', { academicYearId: App.state.yearId }, { silent: true, quiet: true });
+    if (!body.isConnected) return;
+    if (!response.ok) { body.innerHTML = `<p class="form-error">${esc(App.messageOf(response.error))}</p>`; return; }
+    const items = response.data.items;
+    body.innerHTML = `<p class="muted" style="margin-top:0">เลือกประเด็นที่ตรงกับโรงเรียน แก้ข้อความได้ แล้วกด “เพิ่มประเด็นที่เลือก”</p>
+      <div class="st-review">${items.map((item, index) => `<label class="st-review-row"><input type="checkbox" data-pick="${index}">
+        <span><small><span class="st-code f-${factorOf(item)}">${esc(FACTOR[factorOf(item)])}</span> ${esc(item.category)}</small>
+        <input type="text" maxlength="300" data-text="${index}" value="${attr(item.issue)}"><small class="muted">คำถาม: ${esc(item.question || '-')}</small></span></label>`).join('')}</div>
+      <div class="form-actions"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="button" class="primary-button" data-save><i class="fa-solid fa-plus"></i> เพิ่มประเด็นที่เลือก</button></div>`;
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    body.querySelector('[data-save]').addEventListener('click', async () => {
+      const chosen = items.map((item, index) => Object.assign({}, item, { issue: body.querySelector(`[data-text="${index}"]`).value, on: body.querySelector(`[data-pick="${index}"]`).checked }))
+        .filter((item) => item.on);
+      const saved = await App.call('swot.addIssues', { academicYearId: App.state.yearId, items: chosen });
+      if (!saved.ok) return;
+      App.closeModal();
+      App.toast('เพิ่มแล้ว ' + saved.data.created + ' ประเด็น', 'success');
+      App.reloadEntity('swot-issues');
+      App.route();
+    });
+  }
+
+  // ---------- แบบสอบถาม (ในระบบ) ----------
+  const scale = (name, value, label) => `<span class="sv-seg" role="radiogroup" aria-label="${attr(label)}">${[1, 2, 3, 4, 5].map((n) =>
+    `<label><input type="radio" name="${attr(name)}" value="${n}" ${Number(value) === n ? 'checked' : ''} aria-label="${attr(label)} ระดับ ${n}"><span>${n}</span></label>`).join('')}</span>`;
+  const visible = (item, group) => !item.audiences.length || item.audiences.includes(group);
+
+  App.register('#/swot', async () => {
+    const yearId = App.yearIdOrActive();
+    const response = await App.call('swot.data', { academicYearId: yearId });
+    if (!response.ok) return App.renderError(response.error);
+    const d = response.data;
+    const mine = d.mine || { ratings: {}, needs: {}, comment: '' };
+    const state = { group: mine.respondentType || (App.can('swot.edit') ? 'ผู้บริหาร' : 'ครู') };
+    App.content(`${App.strategySteps('swot')}
+      ${d.canManage ? shareHtml(d) : ''}
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-square-poll-vertical c-green"></i> แบบสอบถาม SWOT และความต้องการจำเป็น</h2>
+        <p>${d.mine ? 'คุณตอบแล้วเมื่อ ' + App.fmtDateTime(d.mine.updatedAt) + ' แก้คำตอบแล้วส่งใหม่ได้' : 'ตอบได้ 1 ครั้งต่อปีการศึกษา แก้ไขภายหลังได้'}</p></div>
+        <label>ปีการศึกษา<select data-year>${App.yearOptions(yearId)}</select></label></div>
+        <div data-survey></div></section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; App.route(); });
+    if (d.canManage) bindShare(root, d, yearId);
+    const host = root.querySelector('[data-survey]');
+    const paint = () => {
+      const issues = d.issues.filter((item) => visible(item, state.group));
+      const needs = d.needs.filter((item) => visible(item, state.group));
+      const groups = d.categories.map((category) => ({ category, issues: issues.filter((issue) => issue.category === category.name) })).filter((group) => group.issues.length);
+      if (!d.issues.length && !d.needs.length) {
+        host.innerHTML = `<p class="notice">ยังไม่มีประเด็นในปีการศึกษานี้${d.canManage ? ' — เริ่มที่เมนู “ประเด็นวิเคราะห์ SWOT” และ “ประเด็นความต้องการจำเป็น”' : ''}</p>`;
+        return;
+      }
+      host.innerHTML = `<form data-form novalidate>
+        <label class="st-group-pick">สถานะของผู้ตอบ<select name="respondentType">${d.respondentTypes.map((name) => `<option ${name === state.group ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>
+        ${issues.length ? `<h3 class="st-part"><span>ตอนที่ 1</span> ระดับผลกระทบของแต่ละประเด็น <small class="muted">1 = น้อยที่สุด · 5 = มากที่สุด</small></h3>
+          ${groups.map((group) => `<h4 class="pa-group">${esc(group.category.name)} <small class="muted">(ปัจจัย${group.category.env === 'internal' ? 'ภายใน' : 'ภายนอก'})</small></h4>
+            <div class="sv-items">${group.issues.map((issue) => `<div class="sv-item"><div class="sv-item-text">${App.factorBadge(issue.code)} ${esc(issue.issue)}
+              ${issue.question && issue.question !== issue.issue ? `<br><small class="muted">${esc(issue.question)}</small>` : ''}</div>
+              ${scale('r-' + issue.id, mine.ratings[issue.id], issue.issue)}</div>`).join('')}</div>`).join('')}` : ''}
+        ${needs.length ? `<h3 class="st-part"><span>ตอนที่ 2</span> ความต้องการจำเป็น <small class="muted">ให้คะแนนสภาพปัจจุบัน (D) และสภาพที่ควรจะเป็น (I)</small></h3>
+          <div class="sv-items">${needs.map((item) => {
+            const answer = mine.needs[item.id] || {};
+            return `<div class="sv-item st-need"><div class="sv-item-text"><span class="st-code">${esc(item.subIssue || item.mainIssue)}</span> ${esc(item.item)}
+              ${item.question && item.question !== item.item ? `<br><small class="muted">${esc(item.question)}</small>` : ''}</div>
+              <div class="st-need-scales"><div><small>ปัจจุบัน</small>${scale('d-' + item.id, answer.d, item.item + ' สภาพปัจจุบัน')}</div>
+                <div><small>ควรจะเป็น</small>${scale('i-' + item.id, answer.i, item.item + ' สภาพที่ควรจะเป็น')}</div></div></div>`;
+          }).join('')}</div>` : ''}
+        <label class="st-comment">ข้อเสนอแนะเพิ่มเติม (ไม่บังคับ)<textarea name="comment" rows="2" maxlength="500">${esc(mine.comment || '')}</textarea></label>
+        <p class="form-error" data-error></p>
+        <div class="form-actions"><button type="submit" class="primary-button"><i class="fa-solid fa-paper-plane"></i> ส่งแบบสอบถาม</button></div></form>`;
+      const form = host.querySelector('[data-form]');
+      form.elements.respondentType.addEventListener('change', (event) => { state.group = event.target.value; paint(); });
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const value = (name) => { const checked = form.querySelector(`[name="${CSS.escape(name)}"]:checked`); return checked ? Number(checked.value) : 0; };
+        const ratings = {};
+        const answers = {};
+        let missing = 0;
+        issues.forEach((issue) => { const v = value('r-' + issue.id); if (v) ratings[issue.id] = v; else missing += 1; });
+        needs.forEach((item) => { const pair = { d: value('d-' + item.id), i: value('i-' + item.id) }; if (pair.d && pair.i) answers[item.id] = pair; else missing += 1; });
+        if (missing) { form.querySelector('[data-error]').textContent = 'ยังตอบไม่ครบ ' + missing + ' ข้อ'; return; }
+        const result = await App.call('swot.saveResponse', { academicYearId: yearId, respondentType: state.group, ratings, needs: answers, comment: form.elements.comment.value });
+        if (result.ok) { App.toast('ส่งแบบสอบถามแล้ว ขอบคุณครับ/ค่ะ', 'success'); App.route(); }
+      });
+    };
+    paint();
+  });
+
+  // การ์ดลิงก์สาธารณะ: เปิด/ปิดรับ วันปิดรับ ข้อความต้อนรับ QR และโปสเตอร์
+  function shareHtml(d) {
+    const s = d.survey;
+    const groups = Object.entries(d.counts).map(([name, count]) => `<span class="chip">${esc(name)} <b>${count}</b></span>`).join('') || '<span class="muted">ยังไม่มีผู้ตอบ</span>';
+    return `<section class="panel st-share"><div class="st-share-qr" data-qr aria-label="QR code ของแบบสอบถาม"></div>
+      <div class="st-share-body"><h2><i class="fa-solid fa-link c-sky"></i> ลิงก์แบบสอบถามสำหรับผู้มีส่วนเกี่ยวข้อง
+        <span class="badge ${s.open ? 'success' : 'warning'}">${s.open ? 'เปิดรับอยู่' : s.expired ? 'เลยวันปิดรับแล้ว' : 'ปิดรับ'}</span></h2>
+        <p class="muted">ผู้ปกครอง นักเรียน กรรมการสถานศึกษา และชุมชน เปิดลิงก์หรือสแกน QR แล้วตอบได้โดยไม่ต้องเข้าสู่ระบบ เลือกกลุ่มของตนแล้วเห็นเฉพาะข้อที่ตั้งให้กลุ่มนั้น
+          (ใช้ปีการศึกษาปัจจุบัน) · เครื่องเดียวกันตอบซ้ำ = แก้คำตอบเดิม</p>
+        <div class="st-share-link"><input type="text" readonly value="${attr(s.url)}" data-url aria-label="ลิงก์แบบสอบถาม">
+          <button type="button" class="secondary-button" data-copy><i class="fa-solid fa-copy"></i> คัดลอก</button>
+          <button type="button" class="secondary-button" data-poster><i class="fa-solid fa-print"></i> โปสเตอร์ A4</button></div>
+        <p>ผู้ตอบแล้ว ${App.num(d.channels.internal + d.channels.public)} คน (ในระบบ ${d.channels.internal} · ลิงก์ ${d.channels.public})</p><div class="chip-list">${groups}</div>
+        <form class="st-share-form" data-share novalidate>
+          <label class="check-row"><input type="checkbox" name="open" ${s.enabled ? 'checked' : ''}> เปิดรับคำตอบผ่านลิงก์</label>
+          <label>ปิดรับอัตโนมัติวันที่ (ไม่บังคับ)<input type="date" name="until" value="${attr(s.until)}"><small class="field-error" data-error-for="until"></small></label>
+          <label class="wide">ข้อความต้อนรับ (ไม่บังคับ)<textarea name="intro" rows="2" maxlength="500" placeholder="เช่น โรงเรียนขอความคิดเห็นของท่านเพื่อจัดทำแผนพัฒนาคุณภาพการศึกษา ใช้เวลาประมาณ 10 นาที">${esc(s.intro)}</textarea></label>
+          <div class="wide"><button type="submit" class="primary-button"><i class="fa-solid fa-floppy-disk"></i> บันทึกการเปิดรับ</button></div></form></div></section>`;
+  }
+
+  async function bindShare(root, d, yearId) {
+    const url = d.survey.url;
+    const form = root.querySelector('[data-share]');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      App.clearErrors(form);
+      const saved = await App.call('swot.saveSurvey', { academicYearId: yearId, open: form.elements.open.checked, until: form.elements.until.value, intro: form.elements.intro.value },
+        { silent: true, quiet: true });
+      if (!saved.ok) { App.showErrors(form, saved.error); return App.toast(App.messageOf(saved.error), 'error'); }
+      App.toast(saved.data.open ? 'เปิดรับคำตอบแล้ว' : 'ปิดรับคำตอบแล้ว', 'success');
+      App.route();
+    });
+    root.querySelector('[data-copy]').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(url); } catch (error) { const input = root.querySelector('[data-url]'); input.select(); document.execCommand('copy'); }
+      App.toast('คัดลอกลิงก์แล้ว', 'success');
+    });
+    let canvas = null;
+    const QRCode = await App.loadQr();
+    const qr = root.querySelector('[data-qr]');
+    if (QRCode && qr) { new QRCode(qr, { text: url, width: 148, height: 148, correctLevel: QRCode.CorrectLevel.M }); canvas = qr.querySelector('canvas'); }
+    else if (qr) qr.innerHTML = '<span class="muted">สร้าง QR ไม่ได้</span>';
+    root.querySelector('[data-poster]').addEventListener('click', () => {
+      const settings = App.state.settings || {};
+      const image = canvas ? `<img src="${attr(canvas.toDataURL('image/png'))}" alt="QR code" style="width:300px;height:300px">` : '';
+      App.printHtml('โปสเตอร์แบบสอบถาม', `<div class="center" style="padding-top:24px">
+        <p style="font-size:22px;margin:0">${esc(settings.schoolName || '')}</p>
+        <h1 style="font-size:40px;margin:8px 0 6px">ร่วมกำหนดทิศทางโรงเรียนของเรา</h1>
+        <p style="font-size:22px;margin:0 0 26px">แบบสอบถามความคิดเห็นเพื่อจัดทำแผนพัฒนาคุณภาพการศึกษา</p>
+        ${image}<p style="font-size:20px;margin:18px 0 6px">สแกน QR ด้วยกล้องมือถือ · ใช้เวลาประมาณ 10 นาที · ไม่ต้องระบุชื่อ</p>
+        <p style="font-size:14px;word-break:break-all;margin:0 40px">${esc(url)}</p>
+        ${d.survey.until ? `<p style="font-size:20px;margin-top:22px"><b>ตอบได้ถึงวันที่ ${esc(App.fmtDate(d.survey.until))}</b></p>` : ''}</div>`);
+    });
+  }
+
+  // ---------- ผลวิเคราะห์ SWOT และ Needs ----------
+  App.register('#/swot-result', async () => {
+    const yearId = App.yearIdOrActive();
+    const response = await App.call('swot.result', { academicYearId: yearId });
+    if (!response.ok) return App.renderError(response.error);
+    const d = response.data;
+    const head = `${App.strategySteps('swot-result')}<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-chart-pie c-violet"></i> ผลวิเคราะห์ SWOT และความต้องการจำเป็น</h2>
+      <p>${d.analysis ? `ผู้ตอบ ${App.num(d.analysis.respondentCount)} คน · ประเด็น SWOT ${d.analysis.issueCount} ข้อ · ประเด็น Needs ${d.analysis.needs.count} ข้อ` : ''}</p></div>
+      <label>ปีการศึกษา<select data-year>${App.yearOptions(yearId)}</select></label></div></section>`;
+    if (!d.analysis) {
+      App.content(head + '<section class="panel"><p class="notice">ผลวิเคราะห์เปิดให้ผู้รับผิดชอบแผน (สิทธิ์แก้ไข SWOT) ดู ร่วมตอบแบบสอบถามได้ที่เมนู “แบบสอบถาม SWOT และ Needs”</p></section>');
+    } else {
+      const ai = await App.aiStatus();
+      App.content(head + analysisHtml(d.analysis, ai.swot));
+    }
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; App.route(); });
+    const aiButton = root.querySelector('[data-ai]');
+    if (aiButton) aiButton.addEventListener('click', () => App.showAi('AI บทสรุปผู้บริหาร (SWOT และ Needs)', 'swot.aiSummary', { academicYearId: yearId }));
+    const print = root.querySelector('[data-print]');
+    if (print) print.addEventListener('click', () => App.printHtml('รายงานผลการวิเคราะห์ SWOT', `<h2 style="text-align:center">รายงานผลการวิเคราะห์สภาพแวดล้อม (SWOT) และความต้องการจำเป็น</h2>
+      <p style="text-align:center">${esc(App.state.settings.schoolName || '')} ปีการศึกษา ${esc(App.label('academicYears', yearId))}</p>${document.getElementById('swot-analysis').innerHTML}`));
+  });
+
+  // กราฟไข่แดง: ตำแหน่ง (S−W, O−T) บน 4 ช่อง พร้อมวงรีซ้อน 3 ชั้น (คงรูปแบบเดิม)
+  function chart(a) {
+    const size = 320, mid = size / 2;
+    const range = Math.max(1, Math.ceil(Math.max(Math.abs(a.x), Math.abs(a.y)) * 1.3));
+    const px = mid + (a.x / range) * (mid - 20);
+    const py = mid - (a.y / range) * (mid - 20);
+    return `<svg viewBox="0 0 ${size} ${size}" class="swot-chart" role="img" aria-label="ตำแหน่งกลยุทธ์ของโรงเรียน (${a.x}, ${a.y}) ${attr(a.quadrant.name)}">
+      <rect x="0" y="0" width="${mid}" height="${mid}" fill="#fef9c3"/><rect x="${mid}" y="0" width="${mid}" height="${mid}" fill="#dcfce7"/>
+      <rect x="0" y="${mid}" width="${mid}" height="${mid}" fill="#fee2e2"/><rect x="${mid}" y="${mid}" width="${mid}" height="${mid}" fill="#dbeafe"/>
+      ${[0.9, 0.6, 0.3].map((r) => `<ellipse cx="${mid}" cy="${mid}" rx="${(mid - 12) * r}" ry="${(mid - 12) * r * 0.78}" fill="none" stroke="#94a3b8" stroke-dasharray="4 4"/>`).join('')}
+      <line x1="0" y1="${mid}" x2="${size}" y2="${mid}" stroke="#334155"/><line x1="${mid}" y1="0" x2="${mid}" y2="${size}" stroke="#334155"/>
+      <text x="${size - 8}" y="18" text-anchor="end" font-size="12" fill="#166534">STARS</text><text x="8" y="18" font-size="12" fill="#854d0e">QUESTION MARKS</text>
+      <text x="8" y="${size - 8}" font-size="12" fill="#991b1b">DOGS</text><text x="${size - 8}" y="${size - 8}" text-anchor="end" font-size="12" fill="#1e40af">CASH COWS</text>
+      <text x="${size - 4}" y="${mid - 6}" text-anchor="end" font-size="11" fill="#334155">S</text><text x="4" y="${mid - 6}" font-size="11" fill="#334155">W</text>
+      <text x="${mid + 6}" y="12" font-size="11" fill="#334155">O</text><text x="${mid + 6}" y="${size - 4}" font-size="11" fill="#334155">T</text>
+      <circle cx="${px}" cy="${py}" r="9" fill="#7c3aed" stroke="#fff" stroke-width="3"/>
+      <text x="${px}" y="${py - 14}" text-anchor="middle" font-size="12" font-weight="700" fill="#4c1d95">(${a.x}, ${a.y})</text></svg>`;
+  }
+  App.swotChart = chart;
+
+  function needsHtml(n) {
+    if (!n.count) return '<p class="muted">ยังไม่มีประเด็นความต้องการจำเป็น (เพิ่มที่เมนู “ประเด็นความต้องการจำเป็น”)</p>';
+    if (!n.ranked.length) return '<p class="muted">ยังไม่มีผู้ตอบตอนที่ 2</p>';
+    const max = Math.max(0.01, ...n.ranked.map((item) => item.pni));
+    return `<div class="table-wrap"><table class="data-table st-needs"><thead><tr><th class="num">ลำดับ</th><th>ประเด็น</th><th>มาตรฐาน/ประเด็น</th><th class="num">D</th><th class="num">I</th>
+        <th>PNI</th><th>ระดับ</th></tr></thead><tbody>${n.ranked.map((item) => `<tr><td class="num">${item.rank}</td><td>${esc(item.item)}</td>
+        <td><span class="st-code">${esc(item.subIssue || item.mainIssue)}</span> <small class="muted">${esc(String(item.standard).replace(/^(มาตรฐานที่ \d).*$/, '$1'))}</small></td>
+        <td class="num">${item.d}</td><td class="num">${item.i}</td>
+        <td><span class="st-pni"><span style="width:${Math.max(4, Math.round(item.pni * 100 / max))}%"></span></span> <b>${item.pni.toFixed(3)}</b></td>
+        <td><span class="badge ${LEVEL_TONE[item.level] || 'info'}">${esc(item.level)}</span></td></tr>`).join('')}</tbody></table></div>
+      <h3>ความต้องการจำเป็นรายมาตรฐาน (PNI เฉลี่ย)</h3>
+      <div class="st-std">${n.byStandard.map((standard) => `<div><h4>${esc(standard.standard)} <b>${standard.pni.toFixed(3)}</b></h4>
+        ${App.barList(standard.issues.map((issue) => [issue.code + ' ' + issue.name, Math.round(issue.pni * 1000) / 1000, '#b45309']))}</div>`).join('')}</div>
+      <p class="muted"><small>PNImodified = (I − D) / D · ระดับ: ≥ 0.30 สูงมาก · 0.20–0.29 สูง · 0.10–0.19 ปานกลาง · ต่ำกว่า 0.10 ต่ำ</small></p>`;
+  }
+
+  function analysisHtml(a, aiReady) {
+    return `<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-chess c-green"></i> ตำแหน่งกลยุทธ์ของโรงเรียน</h2>
+        <p>ผู้ตอบ: ${Object.entries(a.respondents).map(([name, count]) => esc(name) + ' ' + count).join(', ') || '-'} · ในระบบ ${a.channels['ในระบบ']} · ลิงก์สาธารณะ ${a.channels['ลิงก์สาธารณะ']}</p></div>
+        <div class="actions no-print">${aiReady ? '<button type="button" class="primary-button" data-ai><i class="fa-solid fa-wand-magic-sparkles"></i> AI บทสรุปผู้บริหาร</button>' : ''}
+          <button type="button" class="secondary-button" data-print><i class="fa-solid fa-print"></i> พิมพ์รายงาน</button></div></div>
+      <div id="swot-analysis"><div class="swot-layout"><div>${chart(a)}</div><div>
+        <h3>สถานภาพ: ${esc(a.quadrant.name)}</h3><p>${esc(a.quadrant.strategy)}</p>
+        <div class="table-wrap"><table class="data-table"><tr><th>จุดแข็ง (S)</th><td>${a.S}</td><th>จุดอ่อน (W)</th><td>${a.W}</td><th>แกน X (S−W)</th><td><b>${a.x}</b></td></tr>
+          <tr><th>โอกาส (O)</th><td>${a.O}</td><th>อุปสรรค (T)</th><td>${a.T}</td><th>แกน Y (O−T)</th><td><b>${a.y}</b></td></tr></table></div>
+        ${a.quadrant.focus ? `<p class="muted">ขั้นต่อไป: เน้นกลยุทธ์ ${App.factorBadge(a.quadrant.focus)} ในเมนู “กลยุทธ์ TOWS Matrix”</p>` : ''}</div></div>
+      <h3>คะแนนรายด้าน (ถ่วงน้ำหนัก)</h3>
+      ${App.simpleTable(['ด้าน', 'ปัจจัย', 'น้ำหนัก', 'เฉลี่ยเชิงบวก', 'เฉลี่ยเชิงลบ', 'คะแนนจริงบวก', 'คะแนนจริงลบ', 'ผลต่าง'],
+        a.categories.map((row) => [row.name, row.env === 'internal' ? 'ภายใน' : 'ภายนอก', row.weight, row.avgPos, row.avgNeg, row.actualPos, row.actualNeg, row.result]))}
+      <div class="swot-top">${Object.keys(FACTOR).map((key) => `<div class="st-factor f-${key}"><h4>${esc(FACTOR[key])}</h4>
+        ${a.factors[key].length ? `<ol>${a.factors[key].slice().sort((x, y) => y.average - x.average).map((item) => `<li><b>${esc(item.code)}</b> ${esc(item.issue)} <small class="muted">(${item.average})</small></li>`).join('')}</ol>` : '<p class="muted">—</p>'}</div>`).join('')}</div>
+      <h3>ความต้องการจำเป็น (Needs Assessment) เรียงตาม PNI</h3>${needsHtml(a.needs)}
+      ${a.comments.length ? `<h3>ข้อเสนอแนะจากผู้ตอบ</h3><ul class="st-comments">${a.comments.map((text) => `<li>${esc(text)}</li>`).join('')}</ul>` : ''}</div></section>`;
+  }
+})();
+</script>

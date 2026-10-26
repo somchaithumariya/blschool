@@ -1,0 +1,250 @@
+<script>
+/**
+ * วิชาการ: กรอกคะแนน ปพ.5, รายงาน ปพ.5, ปพ.6 รายบุคคล, ครูที่ปรึกษา และตารางสอนแบบตาราง
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+  const ui = App.remember('ui:academic', { homeroomId: '', studentId: '' });
+  const SPECIAL = ['', 'ร', 'มส', 'มผ', 'ผ'];
+  const WEEKDAYS = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
+
+  function gradeOf(total) {
+    if (total === '' || total === null || total === undefined || isNaN(total)) return '';
+    const steps = [[80, '4'], [75, '3.5'], [70, '3'], [65, '2.5'], [60, '2'], [55, '1.5'], [50, '1']];
+    for (const [min, grade] of steps) if (total >= min) return grade;
+    return '0';
+  }
+
+  async function signers(yearId) {
+    const key = 'entity:approval-positions:' + yearId;
+    let rows = App.cached(key);
+    if (!rows) {
+      const response = await App.request('entity.list', { entity: 'approval-positions', academicYearId: yearId });
+      rows = App.remember(key, response.ok ? response.data.rows : []);
+    }
+    const byRole = {};
+    rows.forEach((row) => { byRole[row.role] = App.personName(row.personnelId); });
+    return byRole;
+  }
+
+  function signatureBlock(people) {
+    return `<div class="signatures">${people.map(([title, name]) => `<div>ลงชื่อ ...................................................<br>(${esc(name || '...................................................')})<br>${esc(title)}</div>`).join('')}</div>`;
+  }
+
+  // ---------- ปพ.5: ปุ่ม "กรอกคะแนน" ในตารางรายวิชา ----------
+  App.entityActions['porpor5'] = [{ label: 'กรอกคะแนน', icon: 'fa-pen-to-square', permission: 'porpor5.view', handler: (course) => openGradeSheet(course.id) }];
+
+  async function openGradeSheet(courseId) {
+    const response = await App.call('grades.get', { courseId });
+    if (!response.ok) return;
+    const { course, sheet, rows } = response.data;
+    const isActivity = course.subjectType === 'กิจกรรม';
+    const canGrade = App.can('porpor5.grade');
+    App.setPage('กรอกคะแนน ' + course.subjectCode + ' ' + course.subjectName, App.label('homerooms', course.homeroomId));
+    App.content(`<section class="panel"><div class="panel-head"><div><h2>${esc(course.subjectCode)} ${esc(course.subjectName)}</h2>
+        <p>ห้อง ${esc(App.label('homerooms', course.homeroomId))} · ${esc(course.subjectType || '')} · ${esc(course.credit)} หน่วยกิต/ชม. ·
+        ${isActivity ? 'ประเมินผ่าน/ไม่ผ่าน' : `คะแนนเก็บ ${esc(course.collectedMax)} + สอบ ${esc(course.examMax)}`}
+        ${sheet ? ` · <span class="badge ${sheet.status === 'submitted' ? 'success' : 'warning'}">${sheet.status === 'submitted' ? 'ส่งผลแล้ว' : 'ฉบับร่าง'}</span>` : ''}</p></div>
+        <div class="actions no-print"><a class="secondary-button" href="#/porpor5" data-back><i class="fa-solid fa-arrow-left"></i> กลับ</a></div></div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th class="num">เลขที่</th><th>เลขประจำตัว</th><th>ชื่อ-สกุล</th>
+        ${isActivity ? '<th>ผลการประเมิน</th>' : `<th class="center">เก็บ (${esc(course.collectedMax)})</th><th class="center">สอบ (${esc(course.examMax)})</th><th class="center">รวม</th><th class="center">เกรด</th><th>ผลพิเศษ</th>`}</tr></thead>
+        <tbody>${rows.map((row) => `<tr data-student="${attr(row.studentId)}"><td class="num">${esc(row.number)}</td><td>${esc(row.code)}</td><td>${esc(row.name)}</td>
+          ${isActivity ? `<td><select data-x ${canGrade ? '' : 'disabled'}>${['', 'ผ', 'มผ'].map((value) => `<option value="${value}" ${row.grade === value ? 'selected' : ''}>${value ? (value === 'ผ' ? 'ผ่าน' : 'ไม่ผ่าน') : '—'}</option>`).join('')}</select></td>`
+          : `<td class="center"><input class="score" data-c type="number" min="0" max="${attr(course.collectedMax)}" step="0.5" value="${attr(row.c)}" ${canGrade ? '' : 'disabled'}></td>
+            <td class="center"><input class="score" data-e type="number" min="0" max="${attr(course.examMax)}" step="0.5" value="${attr(row.e)}" ${canGrade ? '' : 'disabled'}></td>
+            <td class="center" data-total>${esc(row.total)}</td><td class="center" data-grade><strong>${esc(row.grade)}</strong></td>
+            <td><select data-x ${canGrade ? '' : 'disabled'}>${SPECIAL.map((value) => `<option ${SPECIAL.includes(row.grade) && row.grade === value ? 'selected' : ''}>${value}</option>`).join('')}</select></td>`}
+        </tr>`).join('') || '<tr><td colspan="8" class="empty-row">ยังไม่มีนักเรียนในห้องนี้</td></tr>'}</tbody></table></div>
+      ${canGrade && rows.length ? `<div class="form-actions"><button type="button" class="secondary-button" data-save="draft"><i class="fa-solid fa-floppy-disk"></i> บันทึกร่าง</button>
+        <button type="button" class="primary-button" data-save="submitted"><i class="fa-solid fa-paper-plane"></i> บันทึกและส่งผล</button></div>` : ''}</section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-back]').addEventListener('click', (event) => { event.preventDefault(); App.route(); });
+    root.querySelectorAll('tr[data-student]').forEach((row) => {
+      const update = () => {
+        if (isActivity) return;
+        const c = row.querySelector('[data-c]').value, e = row.querySelector('[data-e]').value, x = row.querySelector('[data-x]').value;
+        const has = c !== '' || e !== '';
+        const total = has ? Math.round(((Number(c) || 0) + (Number(e) || 0)) * 100) / 100 : '';
+        row.querySelector('[data-total]').textContent = x ? '' : total;
+        row.querySelector('[data-grade]').innerHTML = `<strong>${esc(x || gradeOf(total))}</strong>`;
+      };
+      row.querySelectorAll('input,select').forEach((input) => input.addEventListener('input', update));
+    });
+    root.querySelectorAll('[data-save]').forEach((button) => button.addEventListener('click', async () => {
+      const scores = {};
+      root.querySelectorAll('tr[data-student]').forEach((row) => {
+        scores[row.dataset.student] = isActivity ? { c: '', e: '', x: row.querySelector('[data-x]').value }
+          : { c: row.querySelector('[data-c]').value, e: row.querySelector('[data-e]').value, x: row.querySelector('[data-x]').value };
+      });
+      const result = await App.call('grades.save', { courseId, scores, status: button.dataset.save, version: sheet && sheet.version });
+      if (!result.ok) return;
+      App.forget('report:');
+      App.toast(button.dataset.save === 'submitted' ? 'บันทึกและส่งผลแล้ว' : 'บันทึกร่างแล้ว', 'success');
+      openGradeSheet(courseId);
+    }));
+  }
+
+  function yearHomeroomToolbar(extra, homeroomEmpty) {
+    return `<label>ปีการศึกษา<select data-year>${App.yearOptions()}</select></label>
+      <label>ห้องเรียน<select data-homeroom>${App.options('homerooms', ui.homeroomId, { yearId: App.state.yearId, empty: homeroomEmpty || '— เลือกห้อง —' })}</select></label>${extra || ''}`;
+  }
+  function bindYearHomeroom(root, onChange) {
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; ui.homeroomId = ''; App.route(); });
+    root.querySelector('[data-homeroom]').addEventListener('change', (event) => { ui.homeroomId = event.target.value; ui.studentId = ''; onChange && onChange(); });
+  }
+
+  // ---------- รายงาน ปพ.5 ----------
+  App.register('#/porpor5-report', () => {
+    App.content(`<section class="panel no-print"><div class="toolbar">${yearHomeroomToolbar('', 'ทุกห้อง')}
+      <div class="actions"><button type="button" class="primary-button" data-load>แสดงรายงาน</button></div></div></section><div id="report"></div>`);
+    const root = document.getElementById('page-content');
+    bindYearHomeroom(root);
+    root.querySelector('[data-load]').addEventListener('click', loadCourseReport);
+    loadCourseReport();
+  });
+
+  async function loadCourseReport() {
+    const response = await App.call('grades.courseReport', { academicYearId: App.state.yearId, homeroomId: ui.homeroomId });
+    if (!response.ok) return;
+    const grades = ['4', '3.5', '3', '2.5', '2', '1.5', '1', '0', 'ร', 'มส', 'ผ', 'มผ', 'ยังไม่กรอก'];
+    document.getElementById('report').innerHTML = `<section class="panel"><div class="panel-head"><div><h2>สรุปผลการเรียนรายวิชา</h2>
+      <p>${response.data.rows.length} รายวิชา · ปีการศึกษา ${esc(App.label('academicYears', App.state.yearId))}</p></div></div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>รหัสวิชา</th><th>ชื่อวิชา</th><th>ห้อง</th><th>นักเรียน</th>
+        ${grades.map((grade) => `<th class="center">${grade}</th>`).join('')}<th class="center">เฉลี่ย</th><th>สถานะ</th><th class="no-print"></th></tr></thead>
+        <tbody>${response.data.rows.map((row) => `<tr><td>${esc(row.course.subjectCode)}</td><td>${esc(row.course.subjectName)}</td>
+          <td>${esc(App.label('homerooms', row.course.homeroomId))}</td><td class="center">${row.students}</td>
+          ${grades.map((grade) => `<td class="center">${row.distribution[grade] || ''}</td>`).join('')}
+          <td class="center">${row.average ?? '-'}</td>
+          <td>${row.status === 'submitted' ? '<span class="badge success">ส่งผลแล้ว</span>' : row.status ? '<span class="badge warning">ร่าง</span>' : '<span class="badge">ยังไม่กรอก</span>'}</td>
+          <td class="no-print"><button type="button" class="ghost-button" data-print="${attr(row.course.id)}"><i class="fa-solid fa-print"></i> ปพ.5</button></td></tr>`).join('')
+          || `<tr><td colspan="${grades.length + 7}" class="empty-row">ยังไม่มีรายวิชา เพิ่มได้ที่เมนู “ปพ.5 บันทึกผลการเรียน”</td></tr>`}</tbody></table></div></section>`;
+    document.querySelectorAll('[data-print]').forEach((button) => button.addEventListener('click', () => printPorpor5(button.dataset.print)));
+  }
+
+  async function printPorpor5(courseId) {
+    const response = await App.call('grades.get', { courseId });
+    if (!response.ok) return;
+    const { course, rows } = response.data;
+    const people = await signers(course.academicYearId);
+    const s = App.state.settings;
+    App.content(`<div class="no-print toolbar"><button type="button" class="secondary-button" data-back><i class="fa-solid fa-arrow-left"></i> กลับ</button>
+      <button type="button" class="primary-button" onclick="window.print()"><i class="fa-solid fa-print"></i> พิมพ์</button></div>
+      <section class="print-sheet"><h2>แบบบันทึกผลการพัฒนาคุณภาพผู้เรียน (ปพ.5)</h2><h3>${esc(s.schoolName || '')}</h3>
+      <p class="meta"><span>รหัสวิชา ${esc(course.subjectCode)}</span><span>${esc(course.subjectName)}</span><span>ห้อง ${esc(App.label('homerooms', course.homeroomId))}</span>
+        <span>ปีการศึกษา ${esc(App.label('academicYears', course.academicYearId))}</span><span>ครูผู้สอน ${esc(App.personName(course.teacherId))}</span></p>
+      <table class="data-table"><thead><tr><th>เลขที่</th><th>เลขประจำตัว</th><th>ชื่อ-สกุล</th><th class="center">เก็บ</th><th class="center">สอบ</th><th class="center">รวม</th><th class="center">ผลการเรียน</th></tr></thead>
+      <tbody>${rows.map((row) => `<tr><td class="center">${esc(row.number)}</td><td>${esc(row.code)}</td><td>${esc(row.name)}</td><td class="center">${esc(row.c)}</td>
+        <td class="center">${esc(row.e)}</td><td class="center">${esc(row.total)}</td><td class="center"><strong>${esc(row.grade)}</strong></td></tr>`).join('')}</tbody></table>
+      ${signatureBlock([['ครูผู้สอน', App.personName(course.teacherId)], ['หัวหน้างานวัดผล', people['หัวหน้างานวัดผล']],
+        ['รองผู้อำนวยการฝ่ายวิชาการ', people['รองผู้อำนวยการฝ่ายวิชาการ'] || s.academicHeadName], ['ผู้อำนวยการโรงเรียน', people['ผู้อำนวยการโรงเรียน'] || s.directorName]])}</section>`);
+    document.querySelector('[data-back]').addEventListener('click', () => App.route());
+  }
+
+  // ---------- ปพ.6 รายบุคคล ----------
+  App.register('#/porpor6', async () => {
+    const students = await rosterOptions();
+    App.content(`<section class="panel no-print"><div class="toolbar">${yearHomeroomToolbar(`<label class="grow">นักเรียน<select data-student><option value="">— เลือกนักเรียน —</option>
+      ${students.map((row) => `<option value="${attr(row.studentId)}" ${row.studentId === ui.studentId ? 'selected' : ''}>${esc(row.number)}. ${esc(row.name)}</option>`).join('')}</select></label>`)}
+      <div class="actions"><button type="button" class="primary-button" data-load>แสดง ปพ.6</button><button type="button" class="secondary-button" onclick="window.print()"><i class="fa-solid fa-print"></i> พิมพ์</button></div></div></section>
+      <div id="report"></div>`);
+    const root = document.getElementById('page-content');
+    bindYearHomeroom(root, () => App.route());
+    root.querySelector('[data-student]').addEventListener('change', (event) => { ui.studentId = event.target.value; });
+    root.querySelector('[data-load]').addEventListener('click', loadPorpor6);
+    if (ui.studentId) loadPorpor6();
+  });
+
+  async function rosterOptions() {
+    if (!ui.homeroomId) return [];
+    const response = await App.call('roster.get', { homeroomId: ui.homeroomId }, { quiet: true });
+    return response.ok ? response.data : [];
+  }
+
+  async function loadPorpor6() {
+    if (!ui.studentId) return App.toast('กรุณาเลือกนักเรียน', 'error');
+    const response = await App.call('grades.studentReport', { studentId: ui.studentId, academicYearId: App.state.yearId });
+    if (!response.ok) return;
+    const data = response.data;
+    const s = App.state.settings;
+    const people = await signers(App.state.yearId);
+    const homeroom = App.lookupList('homerooms').find((item) => item.id === data.enrollment.homeroomId) || {};
+    const total = data.attendance.P + data.attendance.L + data.attendance.E + data.attendance.A;
+    document.getElementById('report').innerHTML = `<section class="print-sheet"><h2>แบบรายงานผลการพัฒนาคุณภาพผู้เรียนรายบุคคล (ปพ.6)</h2>
+      <h3>${esc(s.schoolName || '')}</h3>
+      <p class="meta"><span>ชื่อ ${esc(App.label('students', ui.studentId))}</span><span>เลขประจำตัว ${esc((App.lookupList('students').find((item) => item.id === ui.studentId) || {}).code || '')}</span>
+        <span>ห้อง ${esc(homeroom.label || '')} เลขที่ ${esc(data.enrollment.number)}</span><span>ปีการศึกษา ${esc(App.label('academicYears', App.state.yearId))}</span></p>
+      <table class="data-table"><thead><tr><th>รหัสวิชา</th><th>รายวิชา</th><th>ประเภท</th><th class="center">หน่วยกิต/ชม.</th><th class="center">คะแนน</th><th class="center">ผลการเรียน</th></tr></thead>
+        <tbody>${data.rows.map((row) => `<tr><td>${esc(row.subjectCode)}</td><td>${esc(row.subjectName)}</td><td>${esc(row.subjectType)}</td>
+          <td class="center">${esc(row.credit)}</td><td class="center">${esc(row.total)}</td><td class="center"><strong>${esc(row.grade)}</strong></td></tr>`).join('')
+          || '<tr><td colspan="6" class="empty-row">ยังไม่มีรายวิชาของห้องนี้</td></tr>'}</tbody>
+        <tfoot><tr><th colspan="3" class="right">รวมหน่วยกิต / ผลการเรียนเฉลี่ย</th><th class="center">${esc(data.credits)}</th><th></th><th class="center">${data.gpa ?? '-'}</th></tr></tfoot></table>
+      <h3 style="margin-top:18px">สรุปการมาเรียน (รายคาบ)</h3>
+      <p class="meta"><span>มา ${data.attendance.P}</span><span>สาย ${data.attendance.L}</span><span>ลา ${data.attendance.E}</span><span>ขาด ${data.attendance.A}</span>
+        <span>ร้อยละการมาเรียน ${total ? Math.round((data.attendance.P + data.attendance.L) * 1000 / total) / 10 : '-'}</span></p>
+      ${signatureBlock([['ครูที่ปรึกษา', App.personName(homeroom.advisorId)], ['ผู้อำนวยการโรงเรียน', people['ผู้อำนวยการโรงเรียน'] || s.directorName]])}</section>`;
+  }
+
+  // ---------- ครูที่ปรึกษา ----------
+  App.register('#/homeroom', async () => {
+    const mine = App.state.user.personnelId;
+    const all = App.lookupList('homerooms').filter((room) => String(room.academicYearId) === String(App.state.yearId));
+    const rooms = all.filter((room) => room.advisorId === mine || room.coAdvisorId === mine);
+    const choices = rooms.length ? rooms : (App.can('homeroom.edit') || !mine ? all : []);
+    if (!ui.homeroomId || !choices.some((room) => room.id === ui.homeroomId)) ui.homeroomId = choices[0] ? choices[0].id : '';
+    App.content(`<section class="panel no-print"><div class="toolbar"><label>ปีการศึกษา<select data-year>${App.yearOptions()}</select></label>
+      <label>ห้องที่ปรึกษา<select data-homeroom>${choices.map((room) => `<option value="${attr(room.id)}" ${room.id === ui.homeroomId ? 'selected' : ''}>${esc(room.label)}</option>`).join('') || '<option value="">ไม่มีห้องที่ปรึกษา</option>'}</select></label>
+      <div class="actions"><button type="button" class="secondary-button" onclick="window.print()"><i class="fa-solid fa-print"></i> พิมพ์ใบรายชื่อ</button></div></div>
+      ${!rooms.length && mine ? '<p class="muted">คุณยังไม่ได้เป็นครูที่ปรึกษาห้องใดในปีนี้ (กำหนดได้ที่เมนู “ตั้งค่าครูที่ปรึกษา”)</p>' : ''}
+      ${!mine ? '<p class="muted">บัญชีนี้ยังไม่เชื่อมกับทะเบียนบุคลากร จึงแสดงทุกห้อง</p>' : ''}</section><div id="report"></div>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; ui.homeroomId = ''; App.route(); });
+    root.querySelector('[data-homeroom]').addEventListener('change', (event) => { ui.homeroomId = event.target.value; App.route(); });
+    if (!ui.homeroomId) return;
+    const [roster, studentRows] = await Promise.all([rosterOptions(), studentDetails()]);
+    const byId = Object.fromEntries(studentRows.map((row) => [row.id, row]));
+    const room = choices.find((item) => item.id === ui.homeroomId) || {};
+    const header = ['เลขที่', 'เลขประจำตัว', 'ชื่อ-สกุล', 'เพศ', 'ผู้ปกครอง', 'โทรศัพท์ผู้ปกครอง'];
+    const values = roster.map((row) => { const detail = byId[row.studentId] || {}; return [row.number, row.code, row.name, row.gender, detail.guardianName || '', detail.guardianPhone || '']; });
+    const male = roster.filter((row) => row.gender === 'ชาย').length, female = roster.filter((row) => row.gender === 'หญิง').length;
+    document.getElementById('report').innerHTML = `<section class="panel print-sheet"><h2>ใบรายชื่อนักเรียน ห้อง ${esc(room.label || '')}</h2>
+      <p class="meta"><span>ครูที่ปรึกษา ${esc(App.personName(room.advisorId) || '-')}</span>${room.coAdvisorId ? `<span>ครูที่ปรึกษาร่วม ${esc(App.personName(room.coAdvisorId))}</span>` : ''}
+        <span>ชาย ${male} · หญิง ${female} · รวม ${roster.length} คน</span></p>
+      ${App.simpleTable(header, values)}
+      <div class="form-actions no-print" style="justify-content:flex-start">
+        ${App.can('homeroomLog.view') ? '<a class="secondary-button" href="#/homeroom-logs"><i class="fa-solid fa-sun"></i> บันทึกโฮมรูม</a>' : ''}
+        ${App.can('homeVisit.view') ? '<a class="secondary-button" href="#/home-visits"><i class="fa-solid fa-house"></i> เยี่ยมบ้าน</a>' : ''}
+        ${App.can('sdq.view') ? '<a class="secondary-button" href="#/sdq"><i class="fa-solid fa-brain"></i> SDQ</a>' : ''}
+        ${App.can('support.view') ? '<a class="secondary-button" href="#/student-support"><i class="fa-solid fa-hand-holding-heart"></i> ดูแลช่วยเหลือ</a>' : ''}
+        ${App.can('attendance.view') ? '<a class="secondary-button" href="#/attendance"><i class="fa-solid fa-clipboard-user"></i> เช็กชื่อ</a>' : ''}</div></section>`;
+  });
+
+  async function studentDetails() {
+    if (!App.can('student.view')) return [];
+    let rows = App.cached('entity:students:all');
+    if (!rows) {
+      const response = await App.request('entity.list', { entity: 'students' });
+      rows = App.remember('entity:students:all', response.ok ? response.data.rows : []);
+    }
+    return rows;
+  }
+
+  // ---------- ตารางสอนแบบตาราง (แสดงใต้รายการเมื่อเลือกห้อง) ----------
+  App.entityAfter['timetable'] = (target, rows, state) => {
+    if (!state.filters.homeroomId && !state.filters.teacherId) {
+      target.innerHTML = '<p class="muted no-print">เลือก “ห้องเรียน” หรือ “ครูผู้สอน” ด้านบนเพื่อดูตารางสอนแบบตาราง</p>';
+      return;
+    }
+    const maxPeriod = Math.max(8, ...rows.map((row) => Number(row.period) || 0));
+    const days = WEEKDAYS.filter((day) => day !== 'อาทิตย์' && (day !== 'เสาร์' || rows.some((row) => row.weekday === 'เสาร์')));
+    const cell = (day, period) => rows.filter((row) => row.weekday === day && Number(row.period) === period)
+      .map((row) => `<strong>${esc(row.subjectName)}</strong><br><small>${esc(state.filters.homeroomId ? App.personName(row.teacherId) : App.label('homerooms', row.homeroomId))}</small>`).join('<hr>');
+    target.innerHTML = `<section class="panel print-sheet"><h2>ตารางสอน ${esc(state.filters.homeroomId ? 'ห้อง ' + App.label('homerooms', state.filters.homeroomId) : App.personName(state.filters.teacherId))}</h2>
+      <div class="table-wrap"><table class="data-table timetable-grid"><thead><tr><th>วัน / คาบ</th>
+        ${Array.from({ length: maxPeriod }, (_, index) => { const period = App.lookupList('periods').find((item) => Number(item.periodNo) === index + 1);
+          return `<th class="center">${index + 1}${period ? `<br><small>${esc(period.startTime)}-${esc(period.endTime)}</small>` : ''}</th>`; }).join('')}</tr></thead>
+        <tbody>${days.map((day) => `<tr><th>${day}</th>${Array.from({ length: maxPeriod }, (_, index) => `<td class="center">${cell(day, index + 1)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;
+  };
+})();
+</script>

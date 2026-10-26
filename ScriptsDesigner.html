@@ -1,0 +1,563 @@
+<script>
+/**
+ * ตัวออกแบบหน้าแรก: แก้ข้อความ สี ฟอนต์ รูปภาพ (ครอบภาพได้) และลำดับส่วนต่าง ๆ พร้อมเห็นผลบนหน้าแรกจริงทันที
+ * ทุกอย่างเป็น "ร่าง" จนกว่าจะกดบันทึก (รูปจะอัปโหลดตอนบันทึก)
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+  const clone = (value) => JSON.parse(JSON.stringify(value || {}));
+  const ed = { saved: null, draft: null, dirty: false, tab: 'content', seq: 0, timer: null, openGroup: 'home' };
+
+  // ---------- ข้อมูลของแต่ละกลุ่มในแท็บ "เนื้อหา" ----------
+  // [คีย์ส่วน (ใช้เลื่อนไปดู), ชื่อกลุ่ม, ไอคอน, ช่องหัวข้อ, ช่องข้อมูล: [คีย์, ชื่อ, ชนิด, placeholder]]
+  const GROUPS = [
+    ['home', 'ส่วนบน (ภาพสไลด์)', 'fa-panorama', [['hero', 'button', 'ข้อความปุ่ม “รู้จักโรงเรียน”']], [
+      ['schoolName', 'ชื่อโรงเรียน *', 'text'], ['schoolNameEn', 'ชื่อภาษาอังกฤษ', 'text'], ['schoolAffiliation', 'สังกัด (ป้ายเล็กด้านบนชื่อ)', 'text'],
+      ['schoolDescription', 'คำอธิบายสั้น', 'text'], ['schoolMotto', 'คำขวัญ', 'text']]],
+    ['ticker', 'ตัววิ่งกิจกรรมประจำเดือน', 'fa-bullhorn', [['ticker', 'kicker', 'ข้อความหน้าตัววิ่ง']], [
+      ['tickerMessages', 'ข้อความเพิ่มเติม (บรรทัดละ 1 ข้อความ)', 'textarea', 'เช่น เปิดรับสมัครนักเรียนใหม่ 1–15 มี.ค.']],
+      'กิจกรรมของเดือนนี้จากเมนู “ปฏิทินโรงเรียน” แสดงอัตโนมัติ'],
+    ['basic', 'ข้อมูลพื้นฐาน', 'fa-school', [['basic', 'nav', 'ชื่อเมนูด้านบน'], ['basic', 'kicker', 'หัวข้อเล็ก'], ['basic', 'title', 'หัวข้อใหญ่']], [
+      ['schoolCode', 'รหัสโรงเรียน', 'text'], ['schoolLevels', 'ระดับที่เปิดสอน', 'text'], ['schoolEstablished', 'ก่อตั้งเมื่อ', 'text'],
+      ['schoolColors', 'สีประจำโรงเรียน', 'text'], ['schoolTree', 'ต้นไม้ประจำโรงเรียน', 'text']],
+      'จำนวนนักเรียนและบุคลากรคำนวณจากทะเบียนในระบบอัตโนมัติ'],
+    ['about', 'วิสัยทัศน์ พันธกิจ เป้าประสงค์', 'fa-eye', [['about', 'nav', 'ชื่อเมนูด้านบน'], ['about', 'kicker', 'หัวข้อเล็ก'], ['about', 'title', 'หัวข้อใหญ่']], [
+      ['schoolVision', 'วิสัยทัศน์', 'textarea'], ['schoolMission', 'พันธกิจ (บรรทัดละ 1 ข้อ)', 'textarea'], ['schoolGoals', 'เป้าประสงค์ (บรรทัดละ 1 ข้อ)', 'textarea'],
+      ['schoolPhilosophy', 'ปรัชญา', 'text'], ['schoolIdentity', 'อัตลักษณ์', 'text'], ['schoolHistory', 'ประวัติโรงเรียน', 'textarea']]],
+    ['director', 'ผู้บริหาร', 'fa-user-tie', [['director', 'nav', 'ชื่อเมนูด้านบน'], ['director', 'kicker', 'ตำแหน่ง (ข้อความเหนือชื่อ)']], [
+      ['directorName', 'ชื่อผู้อำนวยการ', 'text'], ['directorMessage', 'สารจากผู้อำนวยการ', 'textarea']]],
+    ['news', 'ข่าวสารและกิจกรรม', 'fa-newspaper', [['news', 'nav', 'ชื่อเมนูด้านบน'], ['news', 'kicker', 'หัวข้อเล็ก'], ['news', 'title', 'หัวข้อใหญ่']], [],
+      'ข่าวมาจากเมนู “ประกาศ” (ติ๊ก “แสดงบนหน้าแรก”) และกิจกรรมมาจาก “ปฏิทินโรงเรียน”'],
+    ['gallery', 'ภาพกิจกรรม', 'fa-camera-retro', [['gallery', 'nav', 'ชื่อเมนูด้านบน'], ['gallery', 'kicker', 'หัวข้อเล็ก'], ['gallery', 'title', 'หัวข้อใหญ่']], [],
+      'เพิ่ม/ลบ/ครอบภาพได้ที่แท็บ “รูปภาพ”'],
+    ['contact', 'ติดต่อโรงเรียน', 'fa-address-book', [['contact', 'nav', 'ชื่อเมนูด้านบน'], ['contact', 'kicker', 'หัวข้อเล็ก'], ['contact', 'title', 'หัวข้อใหญ่']], [
+      ['schoolAddress', 'ที่อยู่', 'textarea'], ['schoolPhone', 'โทรศัพท์', 'text'], ['schoolEmail', 'อีเมล', 'text'],
+      ['schoolWebsite', 'เว็บไซต์ (https://…)', 'text'], ['schoolFacebook', 'Facebook (https://…)', 'text'], ['schoolMapUrl', 'ลิงก์ Google Maps (https://…)', 'text'],
+      ['footerText', 'ข้อความท้ายหน้า', 'text']]]
+  ];
+
+  // ---------- สีและตัวอักษร ----------
+  const COLOR_FIELDS = [
+    ['accent', 'สีเน้น (ปุ่ม หัวข้อเล็ก เส้นใต้ ตัวเลข)'], ['dark', 'สีเข้มหลัก (พื้นส่วนบน การ์ดวิสัยทัศน์)'],
+    ['heroText', 'สีตัวอักษรบนภาพส่วนบน'], ['heroOverlay', 'สีฟิล์มทับภาพสไลด์'],
+    ['heading', 'สีหัวข้อแต่ละส่วน'], ['text', 'สีตัวอักษรทั่วไป'], ['pageBg', 'สีพื้นหลังหน้า'], ['cardBg', 'สีพื้นการ์ด'],
+    ['tickerBg', 'สีพื้นตัววิ่ง'], ['tickerText', 'สีตัวอักษรตัววิ่ง'], ['footerBg', 'สีพื้นท้ายหน้า'], ['footerText', 'สีตัวอักษรท้ายหน้า']
+  ];
+  const PALETTES = [
+    ['ตามธีมระบบ', {}],
+    ['ฟ้าสดใส', { accent: '#2563eb', dark: '#0b2a5b', tickerBg: '#1d4ed8', footerBg: '#0b2a5b' }],
+    ['เขียวธรรมชาติ', { accent: '#15803d', dark: '#0f2e1d', tickerBg: '#166534', footerBg: '#0f2e1d', pageBg: '#f3f8f4' }],
+    ['ม่วงหรูหรา', { accent: '#7c3aed', dark: '#1e1238', tickerBg: '#6d28d9', footerBg: '#1e1238', pageBg: '#f7f5fc' }],
+    ['แดง-ทอง', { accent: '#b91c1c', dark: '#3b0a0a', tickerBg: '#a16207', footerBg: '#3b0a0a', heading: '#7f1d1d', pageBg: '#fdf8f3' }],
+    ['ชมพูพาสเทล', { accent: '#db2777', dark: '#4a1030', tickerBg: '#ec4899', footerBg: '#4a1030', pageBg: '#fdf4f8' }],
+    ['ส้มอบอุ่น', { accent: '#ea580c', dark: '#2b150a', tickerBg: '#c2410c', footerBg: '#2b150a', pageBg: '#fff8f2' }]
+  ];
+
+  // ---------- รูปภาพ ----------
+  // [ชนิด, คีย์, ชื่อ, สัดส่วนครอบเริ่มต้น, ขนาดสูงสุด, เก็บ PNG]
+  const SINGLE_IMAGES = [
+    ['logo', 'logoFileId', 'ตราโรงเรียน', 1, 600, true],
+    ['cover', 'coverFileId', 'ภาพปก (ใช้เมื่อไม่มีภาพสไลด์)', 16 / 9, 1920, false],
+    ['director', 'directorPhotoFileId', 'รูปผู้อำนวยการ', 1, 800, false]
+  ];
+  const LIST_IMAGES = [
+    ['slide', 'heroSlides', 'ภาพสไลด์ส่วนบน', 16 / 9, 1920, 10],
+    ['gallery', 'gallery', 'ภาพกิจกรรม', 4 / 3, 1600, 24]
+  ];
+
+  App.register('#/landing-editor', async () => {
+    if (!App.can('settings.edit')) { App.renderForbidden(); return; }
+    App.content('<section class="panel empty-state"><div class="empty-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div><h2>กำลังเปิดตัวออกแบบหน้าแรก…</h2></section>');
+    await App.refreshLanding();
+    openDesigner();
+  });
+
+  function openDesigner() {
+    ed.saved = clone(App.state.settings);
+    ed.draft = clone(App.state.settings);
+    ed.dirty = false;
+    const view = document.getElementById('login-view');
+    document.getElementById('app-shell').classList.add('hidden');
+    document.getElementById('preview-exit').classList.add('hidden');
+    view.classList.remove('hidden', 'previewing');
+    view.classList.add('customizing');
+    document.getElementById('customizer-root').innerHTML = `<aside class="designer" id="designer" aria-label="ตัวออกแบบหน้าแรก">
+      <header class="designer-head"><div><strong><i class="fa-solid fa-wand-magic-sparkles"></i> ออกแบบหน้าแรก</strong><small data-dirty>ยังไม่มีการเปลี่ยนแปลง</small></div>
+        <div class="designer-actions"><button type="button" class="secondary-button" data-exit>ปิด</button>
+          <button type="button" class="primary-button" data-save><i class="fa-solid fa-floppy-disk"></i> บันทึก</button></div></header>
+      <nav class="designer-tabs">${[['content', 'fa-pen', 'เนื้อหา'], ['style', 'fa-palette', 'สีและตัวอักษร'], ['images', 'fa-images', 'รูปภาพ'], ['layout', 'fa-layer-group', 'จัดวาง']]
+        .map(([key, icon, name]) => `<button type="button" data-tab="${key}"><i class="fa-solid ${icon}"></i> ${name}</button>`).join('')}</nav>
+      <div class="d-devices"><button type="button" class="active" data-device="desktop"><i class="fa-solid fa-desktop"></i> คอมพิวเตอร์</button>
+        <button type="button" data-device="mobile"><i class="fa-solid fa-mobile-screen"></i> มือถือ</button></div>
+      <div class="designer-body" data-panel></div>
+      <p class="designer-note"><i class="fa-solid fa-circle-info"></i> คลิกข้อความหรือรูปบนหน้าตัวอย่างเพื่อไปที่ช่องแก้ไข · ทุกอย่างยังไม่บันทึกจนกว่าจะกด “บันทึก”</p>
+    </aside><button type="button" class="designer-toggle primary-button" data-toggle-panel><i class="fa-solid fa-eye"></i> <span>ดูตัวอย่าง</span></button>`;
+    const panel = document.getElementById('designer');
+    panel.addEventListener('input', onInput);
+    panel.addEventListener('change', onInput);
+    panel.addEventListener('click', onPanelClick);
+    document.querySelector('[data-toggle-panel]').addEventListener('click', togglePanel);
+    showTab('content');
+    preview();
+    window.scrollTo(0, 0);
+  }
+
+  function closeDesigner() {
+    if (ed.dirty && !confirm('ยังไม่ได้บันทึกการเปลี่ยนแปลง ต้องการออกโดยไม่บันทึกหรือไม่?')) return;
+    Object.keys(App.pendingImages).forEach((key) => delete App.pendingImages[key]);
+    App.state.settings = clone(ed.saved);
+    App.applyBranding(ed.saved);
+    const view = document.getElementById('login-view');
+    view.classList.remove('customizing', 'device-mobile');
+    view.classList.add('hidden');
+    document.getElementById('customizer-root').innerHTML = '';
+    document.getElementById('app-shell').classList.remove('hidden');
+    ed.draft = null;
+    location.hash = '#/school-profile';
+  }
+
+  window.addEventListener('beforeunload', (event) => { if (ed.draft && ed.dirty) { event.preventDefault(); event.returnValue = ''; } });
+
+  function togglePanel() {
+    const panel = document.getElementById('designer');
+    panel.classList.toggle('collapsed');
+    const collapsed = panel.classList.contains('collapsed');
+    document.querySelector('[data-toggle-panel]').innerHTML = collapsed ? '<i class="fa-solid fa-pen"></i> <span>กลับไปแก้ไข</span>' : '<i class="fa-solid fa-eye"></i> <span>ดูตัวอย่าง</span>';
+  }
+
+  // แสดงผลร่างบนหน้าแรกจริง (หน่วงเล็กน้อยระหว่างพิมพ์)
+  function preview() {
+    clearTimeout(ed.timer);
+    ed.timer = setTimeout(() => { App.applyBranding(ed.draft); }, 120);
+  }
+
+  function markDirty() {
+    ed.dirty = true;
+    const note = document.querySelector('#designer [data-dirty]');
+    if (note) { note.textContent = 'มีการเปลี่ยนแปลงที่ยังไม่บันทึก'; note.classList.add('warn'); }
+  }
+
+  function showTab(tab) {
+    ed.tab = tab;
+    document.querySelectorAll('#designer [data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
+    const body = document.querySelector('#designer [data-panel]');
+    body.innerHTML = tab === 'content' ? contentTab() : tab === 'style' ? styleTab() : tab === 'images' ? imagesTab() : layoutTab();
+    body.scrollTop = 0;
+  }
+
+  // ---------- แท็บเนื้อหา ----------
+  function contentTab() {
+    const d = ed.draft;
+    const titles = d.landingTitles || {};
+    const defaults = App.LANDING_DEFAULT_TITLES;
+    return GROUPS.map(([key, name, icon, titleFields, fields, note]) => `<details class="d-group" data-group="${key}" ${ed.openGroup === key ? 'open' : ''}>
+      <summary><i class="fa-solid ${icon}"></i> ${name}<button type="button" class="ghost-button" data-goto="${key}" title="เลื่อนหน้าตัวอย่างไปที่ส่วนนี้"><i class="fa-solid fa-location-crosshairs"></i></button></summary>
+      <div class="d-fields">
+        ${note ? `<p class="d-hint">${esc(note)}</p>` : ''}
+        ${titleFields.map(([section, field, label]) => `<label>${label}<input data-title="${section}:${field}" maxlength="120"
+          value="${attr(((titles[section] || {})[field]) || '')}" placeholder="${attr(((defaults[section] || {})[field]) || '')}"></label>`).join('')}
+        ${fields.map(([field, label, type, placeholder]) => `<label>${label}${type === 'textarea'
+          ? `<textarea data-field="${field}" rows="4" placeholder="${attr(placeholder || '')}">${esc(d[field] || '')}</textarea>`
+          : `<input data-field="${field}" value="${attr(d[field] || '')}" placeholder="${attr(placeholder || '')}">`}<small class="field-error" data-error-for="${field}"></small></label>`).join('')}
+      </div></details>`).join('');
+  }
+
+  // ---------- แท็บสีและตัวอักษร ----------
+  function styleTab() {
+    const style = ed.draft.landingStyle || {};
+    const fonts = App.state.landingFonts || ['Sarabun', 'Prompt', 'Kanit', 'Mitr', 'Noto Sans Thai'];
+    const current = (name, fallback) => {
+      const value = getComputedStyle(document.getElementById('login-view')).getPropertyValue(name).trim();
+      return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+    };
+    const fallbacks = { accent: current('--primary', '#1e3a5f'), dark: current('--nav-bg', '#0f1b33'), heroText: '#ffffff', heroOverlay: current('--nav-bg', '#0f1b33'),
+      heading: '#0f172a', text: '#0f172a', pageBg: '#f4f6fa', cardBg: '#ffffff', tickerBg: current('--primary', '#1e3a5f'), tickerText: '#ffffff',
+      footerBg: current('--nav-bg', '#0f1b33'), footerText: '#ffffff' };
+    const range = (key, label, min, max, unit, fallback) => `<label class="d-range">${label} <output>${style[key] !== undefined ? style[key] : fallback}${unit}</output>
+      <input type="range" data-style="${key}" min="${min}" max="${max}" value="${style[key] !== undefined ? style[key] : fallback}"></label>`;
+    return `<div class="d-section"><h4>ชุดสีสำเร็จรูป</h4><div class="d-palettes">${PALETTES.map(([name, colors], index) => `<button type="button" class="d-palette" data-palette="${index}">
+        <span>${['accent', 'dark', 'tickerBg'].map((key) => `<i style="background:${colors[key] || fallbacks[key]}"></i>`).join('')}</span>${esc(name)}</button>`).join('')}</div></div>
+      <div class="d-section"><h4>สี</h4>${COLOR_FIELDS.map(([key, label]) => `<div class="d-color"><span>${label}</span>
+        <input type="color" data-style="${key}" value="${attr(style[key] || fallbacks[key])}">
+        <button type="button" class="ghost-button" data-style-reset="${key}" title="ใช้ค่าเริ่มต้น" ${style[key] ? '' : 'disabled'}><i class="fa-solid fa-rotate-left"></i></button></div>`).join('')}
+        ${range('heroOverlayOpacity', 'ความเข้มฟิล์มทับภาพ', 0, 95, '%', 85)}</div>
+      <div class="d-section"><h4>ตัวอักษร</h4>
+        <label>ฟอนต์เนื้อหา<select data-style="bodyFont"><option value="">ค่าเริ่มต้น (Sarabun)</option>${fonts.map((font) => `<option ${style.bodyFont === font ? 'selected' : ''} style="font-family:'${attr(font)}'">${esc(font)}</option>`).join('')}</select></label>
+        <label>ฟอนต์หัวข้อ<select data-style="headingFont"><option value="">เหมือนฟอนต์เนื้อหา</option>${fonts.map((font) => `<option ${style.headingFont === font ? 'selected' : ''}>${esc(font)}</option>`).join('')}</select></label>
+        ${range('fontScale', 'ขนาดตัวอักษร', 85, 130, '%', 100)}</div>
+      <div class="d-section"><h4>ส่วนบน (ภาพสไลด์)</h4>
+        <div class="d-segment"><span>จัดข้อความ</span>${[['left', 'fa-align-left', 'ชิดซ้าย'], ['center', 'fa-align-center', 'กึ่งกลาง']].map(([value, icon, name]) =>
+          `<button type="button" data-align="${value}" class="${(style.heroAlign || 'left') === value ? 'active' : ''}"><i class="fa-solid ${icon}"></i> ${name}</button>`).join('')}</div>
+        ${range('heroHeight', 'ความสูงส่วนบน (% ของจอ)', 50, 100, '%', 84)}
+        ${range('tickerSpeed', 'ความเร็วตัววิ่ง', 20, 200, '', 60)}</div>
+      <div class="form-actions"><button type="button" class="secondary-button" data-style-clear><i class="fa-solid fa-rotate-left"></i> คืนค่าสีและตัวอักษรทั้งหมด</button></div>`;
+  }
+
+  // ---------- แท็บรูปภาพ ----------
+  function imagesTab() {
+    const d = ed.draft;
+    return `<p class="d-hint"><i class="fa-solid fa-crop-simple"></i> เลือกรูปแล้วครอบภาพได้ก่อนใช้ ภาพจะแสดงบนหน้าตัวอย่างทันที และอัปโหลดจริงเมื่อกด “บันทึก”</p>
+      ${SINGLE_IMAGES.map(([kind, key, name]) => `<div class="d-image" data-image-slot="${kind}">
+        <div class="d-thumb ${kind}" ${d[key] ? `style="background-image:url('${attr(App.imageUrl(d[key], 400))}')"` : ''}>${d[key] ? '' : '<i class="fa-regular fa-image"></i>'}</div>
+        <div><strong>${name}</strong><div class="d-image-actions">
+          <button type="button" class="secondary-button" data-pick="${kind}"><i class="fa-solid fa-upload"></i> ${d[key] ? 'เปลี่ยน' : 'เลือกรูป'}</button>
+          <button type="button" class="ghost-button" data-library="${kind}"><i class="fa-solid fa-photo-film"></i> จากคลัง</button>
+          ${d[key] ? `<button type="button" class="ghost-button danger" data-clear-image="${kind}"><i class="fa-solid fa-trash"></i></button>` : ''}</div></div></div>`).join('')}
+      ${LIST_IMAGES.map(([kind, key, name, , , max]) => {
+        const items = d[key] || [];
+        return `<div class="d-section" data-image-slot="${kind}"><h4>${name} (${items.length}/${max})</h4>
+          <div class="d-list">${items.map((item, index) => `<div class="d-list-item">
+            <div class="d-thumb" style="background-image:url('${attr(App.imageUrl(item.fileId, 400))}')" data-show-slide="${kind === 'slide' ? index : ''}"></div>
+            <input data-caption="${key}:${index}" maxlength="120" value="${attr(item.caption || '')}" placeholder="คำบรรยายภาพ">
+            <div class="d-list-actions"><button type="button" class="ghost-button" data-move="${key}:${index}:-1" ${index === 0 ? 'disabled' : ''} title="เลื่อนขึ้น"><i class="fa-solid fa-arrow-up"></i></button>
+              <button type="button" class="ghost-button" data-move="${key}:${index}:1" ${index === items.length - 1 ? 'disabled' : ''} title="เลื่อนลง"><i class="fa-solid fa-arrow-down"></i></button>
+              <button type="button" class="ghost-button danger" data-remove="${key}:${index}" title="ลบ"><i class="fa-solid fa-trash"></i></button></div></div>`).join('')}</div>
+          ${items.length < max ? `<button type="button" class="secondary-button block" data-pick="${kind}"><i class="fa-solid fa-plus"></i> เพิ่มภาพ (เลือกได้หลายภาพ)</button>` : ''}</div>`;
+      }).join('')}`;
+  }
+
+  // ---------- แท็บจัดวาง ----------
+  function layoutTab() {
+    const d = ed.draft;
+    const sections = d.landingSections || {};
+    const names = (App.state.landingSections || []).reduce((map, item) => { map[item.key] = item.name; return map; }, {});
+    const order = App.landingOrder(d.landingOrder);
+    const extra = ['ticker', 'events', 'emergency'];
+    return `<div class="d-section"><h4>ลำดับและการแสดงผลแต่ละส่วน</h4><p class="d-hint">ส่วนที่ไม่มีข้อมูลจะซ่อนเองแม้เปิดไว้</p>
+      ${order.map((key, index) => `<div class="d-order"><input type="checkbox" class="switch" data-section="${key}" ${sections[key] !== false ? 'checked' : ''}>
+        <span>${esc(names[key] || key)}</span>
+        <button type="button" class="ghost-button" data-order="${index}:-1" ${index === 0 ? 'disabled' : ''}><i class="fa-solid fa-arrow-up"></i></button>
+        <button type="button" class="ghost-button" data-order="${index}:1" ${index === order.length - 1 ? 'disabled' : ''}><i class="fa-solid fa-arrow-down"></i></button></div>`).join('')}</div>
+      <div class="d-section"><h4>ส่วนเสริม</h4>${extra.map((key) => `<label class="d-order"><input type="checkbox" class="switch" data-section="${key}" ${sections[key] !== false ? 'checked' : ''}>
+        <span>${esc(names[key] || key)}</span></label>`).join('')}</div>`;
+  }
+
+  // ---------- เหตุการณ์ในแผงแก้ไข ----------
+  function onInput(event) {
+    const input = event.target;
+    const d = ed.draft;
+    if (input.dataset.field) d[input.dataset.field] = input.value;
+    else if (input.dataset.title) {
+      const [section, field] = input.dataset.title.split(':');
+      d.landingTitles = Object.assign({}, d.landingTitles);
+      d.landingTitles[section] = Object.assign({}, d.landingTitles[section], { [field]: input.value });
+      if (!input.value) delete d.landingTitles[section][field];
+    } else if (input.dataset.style) {
+      d.landingStyle = Object.assign({}, d.landingStyle);
+      const key = input.dataset.style;
+      const value = input.type === 'range' ? Number(input.value) : input.value;
+      if (value === '' || value === null) delete d.landingStyle[key]; else d.landingStyle[key] = value;
+      const output = input.closest('.d-range') && input.closest('.d-range').querySelector('output');
+      if (output) output.textContent = input.value + (key === 'tickerSpeed' ? '' : '%');
+      const reset = input.closest('.d-color') && input.closest('.d-color').querySelector('[data-style-reset]');
+      if (reset) reset.disabled = false;
+    } else if (input.dataset.caption) {
+      const [key, index] = input.dataset.caption.split(':');
+      d[key] = d[key].map((item, position) => position === Number(index) ? Object.assign({}, item, { caption: input.value }) : item);
+      if (key === 'heroSlides') App.showSlide(Number(index));
+    } else if (input.dataset.section) {
+      d.landingSections = Object.assign({}, d.landingSections, { [input.dataset.section]: input.checked });
+    } else return;
+    if (event.type === 'change' && !input.dataset.style && !input.dataset.section) return;
+    markDirty();
+    preview();
+  }
+
+  function onPanelClick(event) {
+    const target = event.target.closest('button, summary');
+    if (!target) return;
+    const d = ed.draft;
+    const data = target.dataset;
+    if (data.tab) { showTab(data.tab); return; }
+    if (data.device) {
+      document.querySelectorAll('#designer [data-device]').forEach((button) => button.classList.toggle('active', button === target));
+      document.getElementById('login-view').classList.toggle('device-mobile', data.device === 'mobile');
+      return;
+    }
+    if (data.exit !== undefined) { closeDesigner(); return; }
+    if (data.save !== undefined) { saveDesign(); return; }
+    if (data.goto) { event.preventDefault(); scrollPreview(data.goto); return; }
+    if (target.tagName === 'SUMMARY') { ed.openGroup = target.parentElement.dataset.group; return; }
+    if (data.palette !== undefined) {
+      const colors = PALETTES[Number(data.palette)][1];
+      const keep = {};
+      ['bodyFont', 'headingFont', 'fontScale', 'heroAlign', 'heroHeight', 'tickerSpeed', 'heroOverlayOpacity'].forEach((key) => {
+        if ((d.landingStyle || {})[key] !== undefined) keep[key] = d.landingStyle[key];
+      });
+      d.landingStyle = Object.assign(keep, colors);
+      changed(true);
+      return;
+    }
+    if (data.styleReset) { d.landingStyle = Object.assign({}, d.landingStyle); delete d.landingStyle[data.styleReset]; changed(true); return; }
+    if (data.styleClear !== undefined) { d.landingStyle = {}; changed(true); return; }
+    if (data.align) { d.landingStyle = Object.assign({}, d.landingStyle, { heroAlign: data.align }); changed(true); return; }
+    if (data.pick) { pickImages(data.pick); return; }
+    if (data.library) { openLibrary(data.library); return; }
+    if (data.clearImage) { d[SINGLE_IMAGES.find((item) => item[0] === data.clearImage)[1]] = ''; changed(true); return; }
+    if (data.move) {
+      const [key, index, step] = data.move.split(':');
+      const items = d[key].slice();
+      const from = Number(index);
+      const to = from + Number(step);
+      [items[from], items[to]] = [items[to], items[from]];
+      d[key] = items;
+      changed(true);
+      return;
+    }
+    if (data.remove) {
+      const [key, index] = data.remove.split(':');
+      d[key] = d[key].filter((_, position) => position !== Number(index));
+      changed(true);
+      return;
+    }
+    if (data.order) {
+      const [index, step] = data.order.split(':').map(Number);
+      const order = App.landingOrder(d.landingOrder);
+      [order[index], order[index + step]] = [order[index + step], order[index]];
+      d.landingOrder = order;
+      changed(true);
+    }
+  }
+
+  function changed(redrawPanel) {
+    markDirty();
+    preview();
+    if (redrawPanel) { const body = document.querySelector('#designer [data-panel]'); const top = body.scrollTop; showTab(ed.tab); body.scrollTop = top; }
+  }
+
+  function scrollPreview(key) {
+    const node = key === 'home' || key === 'ticker' ? document.getElementById('login-view') : document.getElementById('site-' + key);
+    if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    else App.toast('ส่วนนี้ยังไม่แสดง (ยังไม่มีข้อมูลหรือปิดอยู่)', 'info');
+  }
+
+  // คลิกบนหน้าตัวอย่าง: ไปที่ช่องแก้ไขของสิ่งที่คลิก
+  document.addEventListener('click', (event) => {
+    const view = document.getElementById('login-view');
+    if (!ed.draft || !view || !view.classList.contains('customizing') || !view.contains(event.target)) return;
+    if (event.target.closest('.site-nav [data-scroll], .hero-controls, #customizer-root')) return;
+    const text = event.target.closest('[data-edit]');
+    const image = !text && event.target.closest('[data-edit-image]');
+    if (!text && !image) { if (event.target.closest('[data-open-login], [data-gallery]')) event.preventDefault(); return; }
+    event.preventDefault();
+    event.stopPropagation();
+    const panel = document.getElementById('designer');
+    panel.classList.remove('collapsed');
+    if (image) {
+      showTab('images');
+      const slot = panel.querySelector(`[data-image-slot="${image.dataset.editImage}"]`);
+      if (slot) { slot.scrollIntoView({ block: 'center' }); flash(slot); }
+      return;
+    }
+    const key = text.dataset.edit;
+    const selector = key.startsWith('title:') ? `[data-title="${key.slice(6)}"]` : `[data-field="${key}"]`;
+    const group = GROUPS.find((item) => key.startsWith('title:') ? item[3].some((field) => 'title:' + field[0] + ':' + field[1] === key) : item[4].some((field) => field[0] === key));
+    if (group) ed.openGroup = group[0];
+    showTab('content');
+    const input = panel.querySelector(selector);
+    if (input) { input.closest('details').open = true; input.scrollIntoView({ block: 'center' }); input.focus(); flash(input); }
+  }, true);
+
+  function flash(node) { node.classList.add('d-flash'); setTimeout(() => node.classList.remove('d-flash'), 1200); }
+
+  // ---------- รูปภาพ: เลือกไฟล์ → ครอบภาพ → แสดงตัวอย่าง ----------
+  function pickImages(kind) {
+    const single = SINGLE_IMAGES.find((item) => item[0] === kind);
+    const list = LIST_IMAGES.find((item) => item[0] === kind);
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+    input.multiple = !!list;
+    input.addEventListener('change', async () => {
+      const files = [...input.files];
+      const d = ed.draft;
+      for (let index = 0; index < files.length; index += 1) {
+        if (list && (d[list[1]] || []).length >= list[5]) { App.toast(`${list[2]}ได้ไม่เกิน ${list[5]} ภาพ`, 'error'); break; }
+        const config = single || list;
+        const result = await cropImage(files[index], { aspect: config[3], maxSide: config[4], keepPng: single ? single[5] : false,
+          title: `${config[2]}${files.length > 1 ? ` (${index + 1}/${files.length})` : ''}` });
+        if (!result) continue;
+        const id = 'pending-' + (++ed.seq);
+        App.pendingImages[id] = result;
+        if (single) d[single[1]] = id;
+        else d[list[1]] = (d[list[1]] || []).concat([{ fileId: id, caption: '' }]);
+        if (kind === 'slide') setTimeout(() => App.showSlide(d.heroSlides.length - 1), 200);
+        changed(true);
+      }
+    });
+    input.click();
+  }
+
+  function loadAsset(tag, url) {
+    return new Promise((resolve, reject) => {
+      const node = document.createElement(tag);
+      if (tag === 'link') { node.rel = 'stylesheet'; node.href = url; } else node.src = url;
+      node.onload = resolve;
+      node.onerror = reject;
+      document.head.appendChild(node);
+    });
+  }
+
+  let cropperReady = null;
+  function loadCropper() {
+    if (window.Cropper) return Promise.resolve(true);
+    if (!cropperReady) {
+      cropperReady = Promise.all([loadAsset('link', 'https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css'),
+        loadAsset('script', 'https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js')])
+        .then(() => !!window.Cropper).catch(() => { cropperReady = null; return false; });
+    }
+    return cropperReady;
+  }
+
+  function cropImage(file, options) {
+    return new Promise(async (resolve) => {
+      const url = URL.createObjectURL(file);
+      const hasCropper = await loadCropper();
+      const aspects = [['อิสระ', NaN], ['16:9', 16 / 9], ['4:3', 4 / 3], ['1:1', 1], ['3:4', 3 / 4]];
+      const body = App.openModal('ครอบภาพ: ' + options.title, `<div class="crop-layout">
+        <div class="crop-stage"><img data-crop-image src="${attr(url)}" alt=""></div>
+        <div class="crop-side">
+          ${hasCropper ? `<span class="field-label">สัดส่วน</span><div class="crop-ratios">${aspects.map(([name, value]) => `<button type="button" class="secondary-button ${Math.abs((value || 0) - (options.aspect || 0)) < 0.01 || (isNaN(value) && !options.aspect) ? 'active' : ''}" data-ratio="${value}">${name}</button>`).join('')}</div>
+          <span class="field-label">ปรับภาพ</span><div class="crop-ratios">
+            <button type="button" class="secondary-button" data-crop-action="rotate-left" title="หมุนซ้าย"><i class="fa-solid fa-rotate-left"></i></button>
+            <button type="button" class="secondary-button" data-crop-action="rotate-right" title="หมุนขวา"><i class="fa-solid fa-rotate-right"></i></button>
+            <button type="button" class="secondary-button" data-crop-action="zoom-in" title="ขยาย"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+            <button type="button" class="secondary-button" data-crop-action="zoom-out" title="ย่อ"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+            <button type="button" class="secondary-button" data-crop-action="flip" title="พลิกซ้าย-ขวา"><i class="fa-solid fa-left-right"></i></button>
+            <button type="button" class="secondary-button" data-crop-action="reset" title="เริ่มใหม่"><i class="fa-solid fa-arrows-rotate"></i></button></div>
+          <span class="field-label">ตัวอย่าง</span><div class="crop-preview" data-crop-preview></div>` : '<p class="d-hint">โหลดเครื่องมือครอบภาพไม่ได้ (ต้องต่ออินเทอร์เน็ต) ใช้ภาพทั้งภาพแทน</p>'}
+        </div></div>
+        <div class="form-actions"><button type="button" class="secondary-button" data-crop-cancel>ข้าม</button>
+          <button type="button" class="secondary-button" data-crop-whole>ใช้ทั้งภาพ (ไม่ครอบ)</button>
+          ${hasCropper ? '<button type="button" class="primary-button" data-crop-ok><i class="fa-solid fa-crop-simple"></i> ใช้ภาพที่ครอบ</button>' : ''}</div>`);
+      const modal = document.getElementById('modal');
+      const image = body.querySelector('[data-crop-image]');
+      let cropper = null;
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        modal.removeEventListener('close', onClose);
+        if (cropper) cropper.destroy();
+        URL.revokeObjectURL(url);
+        App.closeModal();
+        resolve(value);
+      };
+      const onClose = () => finish(null);
+      modal.addEventListener('close', onClose);
+      if (hasCropper) {
+        const start = () => {
+          cropper = new window.Cropper(image, { aspectRatio: options.aspect || NaN, viewMode: 1, autoCropArea: 0.9, background: false,
+            preview: body.querySelector('[data-crop-preview]'), responsive: true });
+        };
+        if (image.complete) start(); else image.addEventListener('load', start, { once: true });
+        body.querySelectorAll('[data-ratio]').forEach((button) => button.addEventListener('click', () => {
+          body.querySelectorAll('[data-ratio]').forEach((other) => other.classList.toggle('active', other === button));
+          cropper.setAspectRatio(Number(button.dataset.ratio));
+        }));
+        let flipped = 1;
+        body.querySelectorAll('[data-crop-action]').forEach((button) => button.addEventListener('click', () => {
+          const action = button.dataset.cropAction;
+          if (action === 'rotate-left') cropper.rotate(-90);
+          if (action === 'rotate-right') cropper.rotate(90);
+          if (action === 'zoom-in') cropper.zoom(0.1);
+          if (action === 'zoom-out') cropper.zoom(-0.1);
+          if (action === 'flip') { flipped = -flipped; cropper.scaleX(flipped); }
+          if (action === 'reset') { flipped = 1; cropper.reset(); }
+        }));
+        body.querySelector('[data-crop-ok]').addEventListener('click', () => {
+          const canvas = cropper.getCroppedCanvas({ maxWidth: options.maxSide, maxHeight: options.maxSide, imageSmoothingQuality: 'high',
+            fillColor: options.keepPng && file.type === 'image/png' ? 'transparent' : '#ffffff' });
+          finish(toImage(canvas, options.keepPng && file.type === 'image/png'));
+        });
+      }
+      body.querySelector('[data-crop-cancel]').addEventListener('click', () => finish(null));
+      body.querySelector('[data-crop-whole]').addEventListener('click', () => {
+        const scale = Math.min(1, options.maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(image.naturalWidth * scale);
+        canvas.height = Math.round(image.naturalHeight * scale);
+        const context = canvas.getContext('2d');
+        if (!(options.keepPng && file.type === 'image/png')) { context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height); }
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        finish(toImage(canvas, options.keepPng && file.type === 'image/png'));
+      });
+    });
+  }
+
+  function toImage(canvas, png) {
+    const mimeType = png ? 'image/png' : 'image/jpeg';
+    const dataUrl = canvas.toDataURL(mimeType, 0.86);
+    return { dataUrl, mimeType, base64: dataUrl.split(',')[1] };
+  }
+
+  // เลือกจากภาพที่มีอยู่แล้ว (ภาพสไลด์ ภาพกิจกรรม ภาพปก ตรา รูปผู้บริหาร)
+  function openLibrary(kind) {
+    const d = ed.draft;
+    const ids = [];
+    [d, ed.saved].forEach((source) => {
+      ['logoFileId', 'coverFileId', 'directorPhotoFileId'].forEach((key) => { if (source[key]) ids.push(source[key]); });
+      ['heroSlides', 'gallery'].forEach((key) => (source[key] || []).forEach((item) => ids.push(item.fileId)));
+    });
+    const unique = [...new Set(ids)];
+    const slot = SINGLE_IMAGES.find((item) => item[0] === kind);
+    const body = App.openModal('เลือกจากคลังภาพ', unique.length ? `<div class="d-library">${unique.map((id) => `<button type="button" data-pick-id="${attr(id)}"
+      style="background-image:url('${attr(App.imageUrl(id, 400))}')" aria-label="เลือกภาพนี้"></button>`).join('')}</div>`
+      : '<p class="muted">ยังไม่มีภาพในคลัง กรุณาเลือกรูปจากเครื่อง</p>');
+    body.querySelectorAll('[data-pick-id]').forEach((button) => button.addEventListener('click', () => {
+      d[slot[1]] = button.dataset.pickId;
+      App.closeModal();
+      changed(true);
+    }));
+  }
+
+  // ---------- บันทึก: อัปโหลดรูปที่รออยู่ แล้วบันทึกการตั้งค่าครั้งเดียว ----------
+  async function saveDesign() {
+    const d = clone(ed.draft);
+    const button = document.querySelector('#designer [data-save]');
+    const pending = [];
+    SINGLE_IMAGES.forEach(([, key]) => { if (App.pendingImages[d[key]]) pending.push(d[key]); });
+    LIST_IMAGES.forEach(([, key]) => (d[key] || []).forEach((item) => { if (App.pendingImages[item.fileId]) pending.push(item.fileId); }));
+    button.disabled = true;
+    const uploaded = {};
+    try {
+      for (let index = 0; index < pending.length; index += 1) {
+        button.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> อัปโหลดรูป ${index + 1}/${pending.length}`;
+        const image = App.pendingImages[pending[index]];
+        const response = await App.call('settings.storeImage', { mimeType: image.mimeType, base64: image.base64 }, { silent: true });
+        if (!response.ok) return;
+        uploaded[pending[index]] = response.data.fileId;
+      }
+      SINGLE_IMAGES.forEach(([, key]) => { if (uploaded[d[key]]) d[key] = uploaded[d[key]]; });
+      LIST_IMAGES.forEach(([, key]) => { d[key] = (d[key] || []).map((item) => uploaded[item.fileId] ? Object.assign({}, item, { fileId: uploaded[item.fileId] }) : item); });
+      button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> กำลังบันทึก';
+      const response = await App.call('settings.saveLanding', d, { quiet: true });
+      if (!response.ok) {
+        const fields = Object.keys(response.error.fieldErrors || {});
+        App.toast(response.error.message + (fields.length ? '\n' + fields.map((key) => response.error.fieldErrors[key]).join('\n') : ''), 'error');
+        // เก็บรูปที่อัปโหลดแล้วไว้ในร่าง จะได้ไม่ต้องอัปโหลดซ้ำ
+        ed.draft = Object.assign(ed.draft, { logoFileId: d.logoFileId, coverFileId: d.coverFileId, directorPhotoFileId: d.directorPhotoFileId,
+          heroSlides: d.heroSlides, gallery: d.gallery });
+        showTab('content');
+        App.showErrors(document.getElementById('designer'), response.error);
+        return;
+      }
+      Object.keys(App.pendingImages).forEach((key) => delete App.pendingImages[key]);
+      ed.saved = clone(response.data);
+      ed.draft = clone(response.data);
+      ed.dirty = false;
+      App.applyBranding(response.data);
+      const note = document.querySelector('#designer [data-dirty]');
+      note.textContent = 'บันทึกแล้ว';
+      note.classList.remove('warn');
+      showTab(ed.tab);
+      App.toast('บันทึกหน้าแรกแล้ว', 'success');
+    } finally {
+      button.disabled = false;
+      button.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> บันทึก';
+    }
+  }
+})();
+</script>

@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <title>ขอใช้ระบบบริหารจัดการสถานศึกษา</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Sarabun:ital,wght@0,400;0,700;1,400&display=swap">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
+  <style>
+    :root {
+      --desk: #e6ebf1; --paper: #ffffff; --ink: #13294b; --ink-soft: #3c4f6e; --sign: #1d3f91; --stamp: #b3261e;
+      --muted: #5b6675; --line: #cfd6df; --field: #f7f9fb; --focus: #2f6fd6; --ok: #1f7a4d;
+      --ui: 'IBM Plex Sans Thai', 'Noto Sans Thai', Tahoma, sans-serif; --doc: 'Sarabun', 'TH Sarabun New', Tahoma, serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body { background: var(--desk); color: var(--ink); font: 15px/1.6 var(--ui); }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    a { color: var(--focus); }
+
+    .topbar { display: flex; align-items: center; gap: 14px; padding: 14px 24px; background: var(--ink); color: #fff; }
+    .topbar strong { font-size: 1.05rem; font-weight: 600; }
+    .topbar span { color: #b9c6da; font-size: .92rem; }
+
+    .layout { display: grid; grid-template-columns: minmax(360px, 480px) minmax(0, 1fr); min-height: calc(100vh - 56px); }
+    .form-side { background: var(--paper); border-right: 1px solid var(--line); padding: 26px 28px 40px; }
+    .desk { position: sticky; top: 0; height: 100vh; overflow: auto; padding: 28px 32px 40px; }
+    .desk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; max-width: 860px; margin: 0 auto 12px; }
+    .desk-head h2 { margin: 0; font-size: 1rem; font-weight: 600; }
+    .desk-head p { margin: 0; color: var(--muted); font-size: .88rem; }
+
+    h1 { font-size: 1.45rem; line-height: 1.35; margin: 0 0 6px; font-weight: 600; text-wrap: balance; }
+    .intro { color: var(--muted); margin: 0 0 20px; max-width: 42ch; }
+
+    .steps { list-style: none; margin: 0 0 22px; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; counter-reset: step; }
+    .steps li { counter-increment: step; font-size: .84rem; color: var(--muted); padding-top: 8px; border-top: 3px solid var(--line); }
+    .steps li::before { content: counter(step) '. '; font-weight: 600; }
+    .steps li.on { color: var(--ink); border-top-color: var(--ink); font-weight: 600; }
+    .steps li.done { border-top-color: var(--ok); }
+
+    fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 14px; }
+    fieldset[hidden] { display: none; }
+    legend { font-weight: 600; font-size: 1.02rem; margin-bottom: 4px; padding: 0; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { display: grid; gap: 4px; font-size: .9rem; font-weight: 500; }
+    label small { color: var(--muted); font-weight: 400; }
+    .req::after { content: ' *'; color: var(--stamp); }
+    input, select, textarea { width: 100%; min-height: 42px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
+    textarea { min-height: 70px; resize: vertical; }
+    input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; background: #fff; }
+    .error { color: var(--stamp); font-size: .82rem; min-height: 0; }
+    .error:empty { display: none; }
+    .invalid { border-color: var(--stamp); }
+    .checks { display: grid; gap: 6px; }
+    .check { display: flex; align-items: flex-start; gap: 8px; font-weight: 400; }
+    .check input { width: 18px; min-height: 18px; margin: 3px 0 0; accent-color: var(--ink); flex: none; }
+    .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+    .actions { display: flex; gap: 10px; justify-content: space-between; margin-top: 22px; flex-wrap: wrap; }
+    .btn { min-height: 44px; padding: 9px 18px; border-radius: 8px; border: 1px solid var(--line); background: #fff; cursor: pointer; font-weight: 500; }
+    .btn.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+    .btn.primary:hover { background: #0c1d38; }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+    .btn.small { min-height: 34px; padding: 5px 12px; font-size: .86rem; }
+
+    .sign-box { border: 1px dashed #9fb0c7; border-radius: 10px; background: #fbfcfe; padding: 10px; }
+    .sign-box canvas { display: block; width: 100%; height: 170px; touch-action: none; cursor: crosshair; background:
+      linear-gradient(to top, transparent 44px, #c9d3e0 44px, #c9d3e0 45px, transparent 45px); border-radius: 6px; }
+    .sign-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+    .sign-tools span { color: var(--muted); font-size: .84rem; margin-right: auto; }
+    .file-btn { position: relative; overflow: hidden; }
+    .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; min-height: 0; }
+
+    .notice { border-left: 3px solid var(--ink); background: #f1f5fa; padding: 10px 12px; font-size: .88rem; color: var(--ink-soft); border-radius: 0 8px 8px 0; }
+    .progress { display: grid; gap: 6px; margin-top: 16px; font-size: .9rem; }
+    .progress div { display: flex; gap: 8px; align-items: center; color: var(--muted); }
+    .progress div.on { color: var(--ink); font-weight: 500; }
+    .progress div.ok { color: var(--ok); }
+    .progress div::before { content: ''; width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; flex: none; }
+    .progress div.on::before { border-top-color: transparent; animation: spin .8s linear infinite; }
+    .progress div.ok::before { background: currentColor; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .result h2 { font-size: 1.25rem; margin: 0 0 8px; }
+    .result p { margin: 0 0 10px; }
+    .result .mail { font-weight: 600; }
+
+    /* ---------- หนังสือ (A4 ที่ 96 dpi: 794 × 1123 px) ---------- */
+    .sheet-tabs { display: flex; gap: 6px; }
+    .sheet-tabs button { border: 1px solid var(--line); background: #fff; border-radius: 99px; padding: 3px 12px; font-size: .84rem; cursor: pointer; }
+    .sheet-tabs button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .viewport { max-width: 860px; margin: 0 auto; }
+    .frame { position: relative; margin: 0 auto 18px; box-shadow: 0 1px 2px rgba(19, 41, 75, .12), 0 12px 32px rgba(19, 41, 75, .14); }
+    .frame > .page { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+    .page { width: 794px; height: 1123px; background: var(--paper); color: #111; font: 18.5px/1.4 var(--doc); position: relative;
+      padding: 57px 76px 60px 113px; overflow: hidden; }
+    .page p { margin: 0; }
+    .garuda { height: 113px; display: flex; justify-content: center; margin-bottom: 6px; }
+    .garuda img { height: 113px; width: auto; }
+    .garuda .placeholder { width: 96px; height: 113px; border: 1px dashed #bbb; display: grid; place-items: center; color: #999; font-size: 14px; text-align: center; }
+    .head-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+    .agency { width: 270px; }
+    .page .date { margin: 10px 0 12px 284px; }
+    .lead { display: flex; gap: 14px; }
+    .lead > span:first-child { flex: none; }
+    .body { text-indent: 94px; margin-top: 8px !important; }
+    .page .closing { margin: 12px 0 0 250px; width: 300px; text-align: center; }
+    .closing .sig { height: 60px; display: flex; align-items: flex-end; justify-content: center; margin: 4px 0 2px; }
+    .closing .sig img { max-height: 60px; max-width: 240px; }
+    .closing .sig .blank { width: 220px; border-bottom: 1px dotted #999; height: 50px; }
+    .page.one { display: flex; flex-direction: column; }
+    .owner-line { margin-top: auto; padding-top: 14px; font-size: .9em; line-height: 1.38; }
+    .blank-text { color: #9aa3ad; }
+    .page.two { font-size: 17.5px; line-height: 1.45; padding-top: 70px; }
+    .page.two ol li { margin-bottom: 6px; }
+    .page.two h3 { text-align: center; font-size: 20px; margin: 0; }
+    .page.two .sub { text-align: center; margin-bottom: 12px !important; }
+    .page.two h4 { font-size: 17.5px; margin: 12px 0 4px; }
+    .page.two table { width: 100%; border-collapse: collapse; }
+    .page.two td { border: 1px solid #555; padding: 3px 8px; vertical-align: top; }
+    .page.two td:first-child { width: 34%; }
+    .page.two ol { margin: 0; padding-left: 26px; }
+    .page.two .closing { margin-top: 10px; }
+    .stamp { position: absolute; right: 64px; top: 44px; border: 3px solid var(--stamp); color: var(--stamp); border-radius: 8px; padding: 6px 14px;
+      font: 700 17px/1.35 var(--ui); transform: rotate(-8deg); opacity: .88; text-align: center; background: rgba(255, 255, 255, .6); }
+    .stamp small { display: block; font-weight: 500; font-size: 13px; }
+    .stamp.drop { animation: stamp .45s cubic-bezier(.2, 1.4, .4, 1) both; }
+    @keyframes stamp { from { transform: rotate(-8deg) scale(1.8); opacity: 0; } to { transform: rotate(-8deg) scale(1); opacity: .88; } }
+    .capture { position: fixed; left: -10000px; top: 0; }
+
+    .credit { margin: 28px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: .8rem; line-height: 1.5; }
+    .mobile-letter { display: none; }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; }
+      .desk { display: none; }
+      .form-side { border-right: 0; padding: 20px 16px 36px; }
+      .mobile-letter { display: block; margin: 8px -4px 4px; }
+      .topbar { padding: 12px 16px; flex-wrap: wrap; gap: 2px 12px; }
+    }
+    @media (max-width: 520px) { .row { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-motion: reduce) { .stamp.drop, .progress div.on::before { animation: none; } }
+  </style>
+  <?!= include('ScriptsGuard'); ?>
+</head>
+<body>
+  <header class="topbar"><strong>ระบบบริหารจัดการสถานศึกษา</strong><span>ยื่นหนังสือขอใช้ระบบ</span></header>
+  <main class="layout">
+    <section class="form-side">
+      <h1>ขอใช้ระบบสำหรับโรงเรียนของท่าน</h1>
+      <p class="intro">กรอกข้อมูล ผู้อำนวยการลงลายมือชื่อในหนังสือขอใช้ระบบ แล้วกดส่ง ระบบจะติดตั้งให้และส่งลิงก์ ชื่อผู้ใช้ และรหัสผ่านไปที่อีเมลผู้ดูแลระบบของโรงเรียน</p>
+      <ol class="steps"><li data-step-tab="1" class="on">ข้อมูลโรงเรียน</li><li data-step-tab="2">ผู้ลงนามและผู้ดูแลระบบ</li><li data-step-tab="3">ลงนามและส่ง</li></ol>
+      <form id="form" novalidate autocomplete="on">
+        <div class="hp" aria-hidden="true"><label>เว็บไซต์<input name="website" tabindex="-1" autocomplete="off"></label></div>
+
+        <fieldset data-step="1">
+          <legend>ข้อมูลโรงเรียน</legend>
+          <label><span class="req">ชื่อโรงเรียน</span><input name="schoolName" maxlength="120" placeholder="โรงเรียนบ้าน..." required><small class="error" data-error="schoolName"></small></label>
+          <div class="row">
+            <label><span>รหัสสถานศึกษา <small>(ถ้ามี)</small></span><input name="schoolCode" maxlength="20" inputmode="numeric"><small class="error" data-error="schoolCode"></small></label>
+            <label><span class="req">โทรศัพท์โรงเรียน</span><input name="schoolPhone" maxlength="40" inputmode="tel"><small class="error" data-error="schoolPhone"></small></label>
+          </div>
+          <label><span class="req">สังกัด</span><input name="affiliation" maxlength="160" placeholder="สำนักงานเขตพื้นที่การศึกษาประถมศึกษา... เขต ..."><small class="error" data-error="affiliation"></small></label>
+          <label><span class="req">ที่อยู่</span><input name="address" maxlength="200" placeholder="เลขที่ หมู่ ถนน"><small class="error" data-error="address"></small></label>
+          <div class="row">
+            <label><span class="req">ตำบล/แขวง</span><input name="subdistrict" maxlength="80"><small class="error" data-error="subdistrict"></small></label>
+            <label><span class="req">อำเภอ/เขต</span><input name="district" maxlength="80"><small class="error" data-error="district"></small></label>
+          </div>
+          <div class="row">
+            <label><span class="req">จังหวัด</span><input name="province" maxlength="80" list="provinces"><small class="error" data-error="province"></small></label>
+            <label><span class="req">รหัสไปรษณีย์</span><input name="postcode" maxlength="5" inputmode="numeric"><small class="error" data-error="postcode"></small></label>
+          </div>
+          <label><span>อีเมลโรงเรียน <small>(ถ้ามี)</small></span><input name="schoolEmail" type="email" maxlength="120"><small class="error" data-error="schoolEmail"></small></label>
+          <div class="row">
+            <label>จำนวนนักเรียน<input name="students" inputmode="numeric" maxlength="6"><small class="error" data-error="students"></small></label>
+            <label>จำนวนครูและบุคลากร<input name="teachers" inputmode="numeric" maxlength="6"><small class="error" data-error="teachers"></small></label>
+          </div>
+        </fieldset>
+
+        <fieldset data-step="2" hidden>
+          <legend>ผู้ลงนาม (ผู้อำนวยการ)</legend>
+          <label><span class="req">ชื่อ-สกุลผู้อำนวยการ</span><input name="directorName" maxlength="120" placeholder="นายสมชาย ใจดี"><small class="error" data-error="directorName"></small></label>
+          <label><span class="req">ตำแหน่งที่ใช้ลงนาม</span><input name="directorPosition" maxlength="160"><small class="error" data-error="directorPosition"></small></label>
+          <label><span class="req">โทรศัพท์ผู้อำนวยการ</span><input name="directorPhone" maxlength="40" inputmode="tel"><small class="error" data-error="directorPhone"></small></label>
+          <legend style="margin-top:10px">ผู้ดูแลระบบของโรงเรียน</legend>
+          <p class="notice" style="margin:0">ชื่อผู้ใช้และรหัสผ่านสำหรับเข้าระบบจะส่งไปที่อีเมลนี้ กรุณาตรวจให้ถูกต้อง</p>
+          <div class="row">
+            <label><span class="req">ชื่อ-สกุล</span><input name="adminName" maxlength="120"><small class="error" data-error="adminName"></small></label>
+            <label><span class="req">ตำแหน่ง</span><input name="adminPosition" maxlength="120" placeholder="ครู"><small class="error" data-error="adminPosition"></small></label>
+          </div>
+          <label><span class="req">โทรศัพท์</span><input name="adminPhone" maxlength="40" inputmode="tel"><small class="error" data-error="adminPhone"></small></label>
+          <div class="row">
+            <label><span class="req">อีเมล</span><input name="adminEmail" type="email" maxlength="120" autocomplete="email"><small class="error" data-error="adminEmail"></small></label>
+            <label><span class="req">ยืนยันอีเมล</span><input name="adminEmailConfirm" type="email" maxlength="120" autocomplete="off"><small class="error" data-error="adminEmailConfirm"></small></label>
+          </div>
+          <legend style="margin-top:10px">หนังสือ</legend>
+          <div class="row">
+            <label><span>เลขที่หนังสือ <small>(ถ้ามี)</small></span><input name="docNumber" maxlength="60" placeholder="ศธ ๐๔๐๐๒.๐๐๑/๑๒๓"><small class="error" data-error="docNumber"></small></label>
+            <label><span class="req">ลงวันที่</span><input name="letterDate" type="date"><small class="error" data-error="letterDate"></small></label>
+          </div>
+          <div class="checks" role="group" aria-label="งานที่จะใช้ระบบ">
+            <span style="font-size:.9rem;font-weight:500">งานที่จะใช้ระบบ</span>
+            <label class="check"><input type="checkbox" data-purpose data-short="งานวิชาการ" value="งานวิชาการ (ตารางสอน เวลาเรียน ปพ.๕ ปพ.๖)" checked> งานวิชาการ (ตารางสอน เวลาเรียน ปพ.5 ปพ.6)</label>
+            <label class="check"><input type="checkbox" data-purpose data-short="งานบุคคล" value="งานบุคคล (ทะเบียนบุคลากร ลงเวลามาทำงาน ประเมิน ว.๒๓)" checked> งานบุคคล (ทะเบียนบุคลากร ลงเวลามาทำงาน ประเมิน ว.23)</label>
+            <label class="check"><input type="checkbox" data-purpose data-short="ระบบดูแลช่วยเหลือนักเรียน" value="ระบบดูแลช่วยเหลือนักเรียนและความปลอดภัย" checked> ระบบดูแลช่วยเหลือนักเรียนและความปลอดภัย</label>
+            <label class="check"><input type="checkbox" data-purpose data-short="และการประกันคุณภาพการศึกษา" value="การนิเทศ ประกันคุณภาพ และรายงาน SAR" checked> การนิเทศ ประกันคุณภาพ และรายงาน SAR</label>
+          </div>
+        </fieldset>
+
+        <fieldset data-step="3" hidden>
+          <legend>ตรวจหนังสือและลงนาม</legend>
+          <div class="mobile-letter" id="mobile-letter"></div>
+          <div>
+            <span style="font-size:.9rem;font-weight:500" class="req">ลายมือชื่อผู้อำนวยการ</span>
+            <div class="sign-box">
+              <canvas id="pad" aria-label="พื้นที่ลงลายมือชื่อ"></canvas>
+              <div class="sign-tools"><span>เขียนด้วยนิ้วหรือเมาส์บนเส้น</span>
+                <button type="button" class="btn small" id="clear-sign">ล้าง</button>
+                <label class="btn small file-btn">ใช้ภาพลายมือชื่อ<input type="file" id="sign-file" accept="image/png,image/jpeg"></label></div>
+            </div>
+            <small class="error" data-error="signature"></small>
+          </div>
+          <label class="check"><input type="checkbox" name="consent"> ผู้อำนวยการได้อ่านและยอมรับข้อตกลงการใช้งาน (หน้า ๓) และยืนยันว่าข้อมูลถูกต้อง</label>
+          <small class="error" data-error="consent"></small>
+          <p class="notice" style="margin:0">เมื่อกดส่ง ระบบจะบันทึกหนังสือที่ลงนามแล้วเป็นไฟล์ PDF ส่งถึงผู้ดูแลระบบกลาง และติดตั้งระบบให้โรงเรียนโดยอัตโนมัติ ใช้เวลาประมาณ 1–2 นาที</p>
+        </fieldset>
+
+        <div class="actions" id="actions">
+          <button type="button" class="btn" id="back" hidden>ย้อนกลับ</button>
+          <button type="button" class="btn primary" id="next">ถัดไป</button>
+          <button type="submit" class="btn primary" id="send" hidden>ลงนามและส่งคำขอ</button>
+        </div>
+        <p class="error" id="form-error" style="margin-top:10px"></p>
+        <div class="progress" id="progress" hidden>
+          <div data-p="pdf">สร้างหนังสือเป็นไฟล์ PDF</div>
+          <div data-p="send">ส่งคำขอและติดตั้งระบบให้โรงเรียน (ห้ามปิดหน้านี้)</div>
+        </div>
+      </form>
+      <section class="result" id="result" hidden></section>
+      <p class="credit" id="credit"></p>
+    </section>
+
+    <aside class="desk" aria-label="ตัวอย่างหนังสือ">
+      <div class="desk-head"><div><h2>หนังสือขอใช้ระบบ</h2><p>ตัวอย่างนี้ปรับตามข้อมูลที่กรอกทันที</p></div>
+        <div class="sheet-tabs"><button type="button" data-sheet="1" class="on">หน้า ๑ หนังสือ</button><button type="button" data-sheet="2">หน้า ๒ แบบข้อมูล</button><button type="button" data-sheet="3">หน้า ๓ ข้อตกลง</button></div></div>
+      <div class="viewport" id="viewport"></div>
+    </aside>
+  </main>
+  <div class="capture" id="capture" aria-hidden="true"></div>
+  <datalist id="provinces"></datalist>
+
+  <script>
+    window.__REG__ = <?!= boot ?>;
+  </script>
+  <script>
+  (function () {
+    'use strict';
+    const boot = window.__REG__ || {};
+    const dev = boot.credit || { name: '', position: '', office: '', facebook: '', id: '', phone: '', text: '' };
+    const form = document.getElementById('form');
+    const $ = (selector, rootNode) => (rootNode || document).querySelector(selector);
+    const $$ = (selector, rootNode) => Array.from((rootNode || document).querySelectorAll(selector));
+    let step = 1;
+    let sheet = 1;
+    let garuda = '';
+    let signature = '';
+    let pdfUrl = '';
+
+    const PROVINCES = 'กรุงเทพมหานคร กระบี่ กาญจนบุรี กาฬสินธุ์ กำแพงเพชร ขอนแก่น จันทบุรี ฉะเชิงเทรา ชลบุรี ชัยนาท ชัยภูมิ ชุมพร เชียงราย เชียงใหม่ ตรัง ตราด ตาก นครนายก นครปฐม นครพนม นครราชสีมา นครศรีธรรมราช นครสวรรค์ นนทบุรี นราธิวาส น่าน บึงกาฬ บุรีรัมย์ ปทุมธานี ประจวบคีรีขันธ์ ปราจีนบุรี ปัตตานี พระนครศรีอยุธยา พะเยา พังงา พัทลุง พิจิตร พิษณุโลก เพชรบุรี เพชรบูรณ์ แพร่ ภูเก็ต มหาสารคาม มุกดาหาร แม่ฮ่องสอน ยโสธร ยะลา ร้อยเอ็ด ระนอง ระยอง ราชบุรี ลพบุรี ลำปาง ลำพูน เลย ศรีสะเกษ สกลนคร สงขลา สตูล สมุทรปราการ สมุทรสงคราม สมุทรสาคร สระแก้ว สระบุรี สิงห์บุรี สุโขทัย สุพรรณบุรี สุราษฎร์ธานี สุรินทร์ หนองคาย หนองบัวลำภู อ่างทอง อำนาจเจริญ อุดรธานี อุตรดิตถ์ อุทัยธานี อุบลราชธานี'.split(' ');
+    $('#credit').textContent = dev.text || '';
+    $('#provinces').innerHTML = PROVINCES.map((name) => `<option value="${name}">`).join('');
+    const today = new Date(); today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+    form.elements.letterDate.value = today.toISOString().slice(0, 10);
+
+    // ---------- ข้อความ ----------
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const thaiDigits = (value) => String(value ?? '').replace(/[0-9]/g, (digit) => '๐๑๒๓๔๕๖๗๘๙'[digit]);
+    const MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+    const thaiDate = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? thaiDigits(Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + ' ' + (Number(m[1]) + 543)) : ''; };
+    const strip = (value, prefix) => String(value || '').replace(prefix, '').trim();
+    const blank = (text, width) => `<span class="blank-text">${'.'.repeat(width || 30)}</span>`;
+    const val = (name) => (form.elements[name] ? String(form.elements[name].value || '').replace(/\s+/g, ' ').trim() : '');
+    const show = (name, width) => val(name) ? esc(thaiDigits(val(name))) : blank(name, width);
+
+    function values() {
+      const data = {};
+      ['schoolName', 'schoolCode', 'affiliation', 'address', 'subdistrict', 'district', 'province', 'postcode', 'schoolPhone', 'schoolEmail',
+        'directorName', 'directorPosition', 'directorPhone', 'adminName', 'adminPosition', 'adminPhone', 'adminEmail', 'docNumber', 'letterDate',
+        'students', 'teachers', 'website'].forEach((name) => { data[name] = val(name); });
+      data.purpose = $$('[data-purpose]:checked').map((input) => input.value).join(', ');
+      return data;
+    }
+
+    function addressLines() {
+      const lines = [];
+      if (val('address')) lines.push(esc(thaiDigits(val('address'))));
+      const sub = val('subdistrict') ? 'ตำบล' + esc(strip(val('subdistrict'), /^(ตำบล|ต\.|แขวง)\s*/)) : '';
+      const dis = val('district') ? 'อำเภอ' + esc(strip(val('district'), /^(อำเภอ|อ\.|เขต)\s*/)) : '';
+      if (sub || dis) lines.push([sub, dis].filter(Boolean).join(' '));
+      const prov = val('province') ? 'จังหวัด' + esc(strip(val('province'), /^(จังหวัด|จ\.)\s*/)) : '';
+      if (prov || val('postcode')) lines.push([prov, esc(thaiDigits(val('postcode')))].filter(Boolean).join(' '));
+      return lines.length ? lines.join('<br>') : blank('', 28);
+    }
+
+    const sigHtml = () => signature ? `<img src="${signature}" alt="">` : '<span class="blank"></span>';
+    const school = () => val('schoolName') ? esc(val('schoolName')) : blank('', 26);
+
+    // ---------- หนังสือภายนอก (ระเบียบสำนักนายกรัฐมนตรีว่าด้วยงานสารบรรณ) ----------
+    function pageOne() {
+      const email = val('schoolEmail');
+      return `<div class="page one">
+        <div class="garuda">${garuda ? `<img src="${garuda}" alt="ตราครุฑ">` : '<span class="placeholder">ตราครุฑ</span>'}</div>
+        <div class="head-row"><div>ที่ ${val('docNumber') ? esc(thaiDigits(val('docNumber'))) : blank('', 22)}</div>
+          <div class="agency">${school()}<br>${addressLines()}</div></div>
+        <p class="date">${thaiDate(val('letterDate')) || blank('', 24)}</p>
+        <p class="lead"><span>เรื่อง</span><span>ขออนุญาตใช้ระบบบริหารจัดการสถานศึกษา</span></p>
+        <p class="lead" style="margin-top:8px"><span>เรียน</span><span>${esc(boot.addressee || 'ผู้พัฒนาระบบบริหารจัดการสถานศึกษา')}</span></p>
+        <p class="lead" style="margin-top:8px"><span>สิ่งที่ส่งมาด้วย</span><span>แบบข้อมูลประกอบการขอใช้ระบบและข้อตกลงการใช้งาน จำนวน ๑ ฉบับ</span></p>
+        <p class="body">ด้วย${school()} สังกัด${val('affiliation') ? esc(thaiDigits(val('affiliation'))) : blank('', 30)} มีความประสงค์จะนำระบบบริหารจัดการสถานศึกษามาใช้ในการบริหารงานของสถานศึกษา
+          ได้แก่ ${esc($$('[data-purpose]:checked').map((input) => input.dataset.short).join(' ') || 'งานบริหารสถานศึกษา')} เพื่อเพิ่มประสิทธิภาพการบริหารจัดการข้อมูลสารสนเทศของสถานศึกษา</p>
+        <p class="body">ในการนี้ ${school()} จึงขออนุญาตใช้ระบบดังกล่าว โดยมอบหมายให้ ${show('adminName', 26)} ตำแหน่ง ${show('adminPosition', 14)}
+          เป็นผู้ประสานงานและผู้ดูแลระบบของสถานศึกษา โทรศัพท์ ${show('adminPhone', 16)} ไปรษณีย์อิเล็กทรอนิกส์ ${val('adminEmail') ? esc(val('adminEmail')) : blank('', 24)}
+          ทั้งนี้ สถานศึกษาจะปฏิบัติตามข้อตกลงการใช้งานตามสิ่งที่ส่งมาด้วย และจะคุ้มครองข้อมูลส่วนบุคคลตามพระราชบัญญัติคุ้มครองข้อมูลส่วนบุคคล พ.ศ. ๒๕๖๒</p>
+        <p class="body">จึงเรียนมาเพื่อโปรดพิจารณาอนุญาต</p>
+        <div class="closing">ขอแสดงความนับถือ<div class="sig">${sigHtml()}</div>(${val('directorName') ? esc(val('directorName')) : blank('', 26)})<br>${show('directorPosition', 30)}</div>
+        <div class="owner-line">${school()}<br>โทร. ${show('schoolPhone', 18)}${email ? '<br>ไปรษณีย์อิเล็กทรอนิกส์ ' + esc(email) : ''}</div>
+      </div>`;
+    }
+
+    function pageTwo() {
+      const row = (label, value) => `<tr><td>${label}</td><td>${value}</td></tr>`;
+      const address = [val('address'), val('subdistrict') && 'ตำบล' + strip(val('subdistrict'), /^(ตำบล|ต\.|แขวง)\s*/), val('district') && 'อำเภอ' + strip(val('district'), /^(อำเภอ|อ\.|เขต)\s*/),
+        val('province') && 'จังหวัด' + strip(val('province'), /^(จังหวัด|จ\.)\s*/), val('postcode')].filter(Boolean).join(' ');
+      return `<div class="page two">
+        <h3>แบบข้อมูลประกอบการขอใช้ระบบบริหารจัดการสถานศึกษา</h3>
+        <p class="sub">แนบท้ายหนังสือ${school()} ที่ ${val('docNumber') ? esc(thaiDigits(val('docNumber'))) : blank('', 14)} ลงวันที่ ${thaiDate(val('letterDate')) || blank('', 16)}</p>
+        <h4>๑. ข้อมูลสถานศึกษา</h4>
+        <table>${row('ชื่อสถานศึกษา', school())}${row('รหัสสถานศึกษา', show('schoolCode', 12))}${row('สังกัด', show('affiliation', 30))}
+          ${row('ที่ตั้ง', address ? esc(thaiDigits(address)) : blank('', 30))}${row('โทรศัพท์ / อีเมล', show('schoolPhone', 12) + (val('schoolEmail') ? ' / ' + esc(val('schoolEmail')) : ''))}
+          ${row('จำนวนนักเรียน / ครูและบุคลากร', show('students', 6) + ' คน / ' + show('teachers', 6) + ' คน')}</table>
+        <h4>๒. ผู้บริหารและผู้ดูแลระบบ</h4>
+        <table>${row('ผู้อำนวยการ (ผู้ลงนาม)', show('directorName', 24) + ' โทร. ' + show('directorPhone', 12))}
+          ${row('ผู้ดูแลระบบของสถานศึกษา', show('adminName', 24) + ' ตำแหน่ง ' + show('adminPosition', 10))}
+          ${row('โทรศัพท์ / อีเมลรับบัญชีผู้ใช้', show('adminPhone', 12) + ' / ' + (val('adminEmail') ? esc(val('adminEmail')) : blank('', 20)))}
+          ${row('งานที่จะใช้ระบบ', esc(thaiDigits($$('[data-purpose]:checked').map((input) => input.value).join(' / ') || '-')))}</table>
+        <h4>๓. ผู้คิดค้นและพัฒนาระบบ (เจ้าของลิขสิทธิ์)</h4>
+        <table>${row('ชื่อ / ตำแหน่ง', esc(dev.name + ' ' + dev.position + ' ' + dev.office))}
+          ${row('ติดต่อ', esc('FB: ' + dev.facebook + ' · ID: ' + thaiDigits(dev.id) + ' · โทร. ' + thaiDigits(dev.phone)))}</table>
+        <p style="margin-top:14px">ข้อตกลงการใช้งาน ตามเอกสารหน้าถัดไป</p>
+      </div>`;
+    }
+
+    function pageThree() {
+      return `<div class="page two">
+        <h3>ข้อตกลงการใช้ระบบบริหารจัดการสถานศึกษา</h3>
+        <p class="sub">${school()} ตกลงใช้ระบบตามเงื่อนไขดังต่อไปนี้</p>
+        <ol>
+          <li>สถานศึกษาใช้ระบบเพื่อการบริหารจัดการภายในสถานศึกษาเท่านั้น ไม่นำไปจำหน่าย ให้เช่า หรือแจกจ่ายต่อ</li>
+          <li>ลิขสิทธิ์ของระบบเป็นของผู้คิดค้นและพัฒนาตามแบบข้อมูลข้อ ๓ สถานศึกษาได้รับอนุญาตให้ใช้งานเท่านั้น ไม่แก้ไข ดัดแปลง ทำซ้ำ หรืออ้างสิทธิ์ความเป็นเจ้าของ และไม่ลบหรือปิดบังชื่อผู้พัฒนาที่ปรากฏในระบบ</li>
+          <li>เก็บรักษาชื่อผู้ใช้และรหัสผ่านเป็นความลับ เปลี่ยนรหัสผ่านเมื่อเข้าใช้ครั้งแรก และกำหนดสิทธิ์ผู้ใช้ตามหน้าที่</li>
+          <li>สถานศึกษาเป็นผู้ควบคุมข้อมูลส่วนบุคคลของนักเรียนและบุคลากร บันทึกข้อมูลเท่าที่จำเป็นต่อการปฏิบัติงาน ผู้พัฒนาระบบทำหน้าที่ผู้ให้บริการระบบ และไม่นำข้อมูลของสถานศึกษาไปใช้เพื่อวัตถุประสงค์อื่น</li>
+          <li>ข้อมูลของสถานศึกษาจัดเก็บในฐานข้อมูลแยกเฉพาะ ผู้ใช้ของสถานศึกษาอื่นเข้าถึงไม่ได้ และสถานศึกษาส่งออกข้อมูลของตนได้ตลอดเวลา</li>
+          <li>ผู้พัฒนาอาจปรับปรุงระบบเป็นระยะ และอาจระงับการใช้งานชั่วคราวเมื่อพบการใช้งานที่ขัดต่อข้อตกลงนี้</li>
+          <li>สถานศึกษาแจ้งผู้พัฒนาเป็นหนังสือหรือทางอีเมลเมื่อต้องการยกเลิกการใช้งาน</li>
+        </ol>
+        <div class="closing" style="margin-top:28px">ลงชื่อผู้ขอใช้ระบบ<div class="sig">${sigHtml()}</div>(${val('directorName') ? esc(val('directorName')) : blank('', 26)})<br>${show('directorPosition', 30)}<br>วันที่ ${thaiDate(val('letterDate')) || blank('', 18)}</div>
+      </div>`;
+    }
+
+    // ---------- แสดงตัวอย่าง (ย่อให้พอดีพื้นที่) ----------
+    function renderInto(container, pages) {
+      const width = Math.min(container.clientWidth || 700, 860);
+      const scale = width / 794;
+      container.innerHTML = pages.map((html) => `<div class="frame" style="width:${width}px;height:${Math.round(1123 * scale)}px">${html}</div>`).join('');
+      $$('.frame > .page', container).forEach((page) => { fit(page); page.style.transform = `scale(${scale})`; });
+    }
+    // ข้อความยาว (ชื่อโรงเรียน/ผู้ลงนามยาว) ไม่ให้ล้นหน้า A4: ลดขนาดตัวอักษรทีละน้อยจนพอดี
+    function fit(page) {
+      let size = parseFloat(getComputedStyle(page).fontSize);
+      while (page.scrollHeight > page.clientHeight + 1 && size > 14) { size -= 0.5; page.style.fontSize = size + 'px'; }
+    }
+    let pending = 0;
+    function render() {
+      clearTimeout(pending);
+      pending = setTimeout(() => {
+        const pages = [pageOne(), pageTwo(), pageThree()];
+        const desk = $('#viewport');
+        if (desk.offsetParent) renderInto(desk, [pages[sheet - 1]]);
+        const mobile = $('#mobile-letter');
+        if (mobile.offsetParent) renderInto(mobile, pages);
+      }, 16);
+    }
+    $$('[data-sheet]').forEach((button) => button.addEventListener('click', () => {
+      sheet = Number(button.dataset.sheet);
+      $$('[data-sheet]').forEach((item) => item.classList.toggle('on', item === button));
+      render();
+    }));
+    form.addEventListener('input', (event) => {
+      if (event.target.name === 'schoolName' && !form.elements.directorPosition.dataset.touched) {
+        form.elements.directorPosition.value = val('schoolName') ? 'ผู้อำนวยการ' + val('schoolName') : '';
+      }
+      if (event.target.name === 'directorPosition') form.elements.directorPosition.dataset.touched = '1';
+      if (event.target.name) clearError(event.target.name);
+      render();
+    });
+    window.addEventListener('resize', render);
+
+    // ---------- ขั้นตอน ----------
+    const STEP_FIELDS = {
+      1: ['schoolName', 'affiliation', 'address', 'subdistrict', 'district', 'province', 'postcode', 'schoolPhone'],
+      2: ['directorName', 'directorPosition', 'directorPhone', 'adminName', 'adminPosition', 'adminPhone', 'adminEmail', 'letterDate']
+    };
+    const NAMES = { schoolName: 'ชื่อโรงเรียน', affiliation: 'สังกัด', address: 'ที่อยู่', subdistrict: 'ตำบล/แขวง', district: 'อำเภอ/เขต', province: 'จังหวัด',
+      postcode: 'รหัสไปรษณีย์', schoolPhone: 'โทรศัพท์โรงเรียน', directorName: 'ชื่อ-สกุลผู้อำนวยการ', directorPosition: 'ตำแหน่ง', directorPhone: 'โทรศัพท์',
+      adminName: 'ชื่อ-สกุล', adminPosition: 'ตำแหน่ง', adminPhone: 'โทรศัพท์', adminEmail: 'อีเมล', letterDate: 'วันที่' };
+    const EMAIL = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]+$/;
+
+    function setError(name, message) {
+      const slot = $(`[data-error="${name}"]`);
+      if (slot) slot.textContent = message;
+      if (form.elements[name] && form.elements[name].classList) form.elements[name].classList.toggle('invalid', !!message);
+    }
+    function clearError(name) { setError(name, ''); if (name === 'adminEmail') setError('adminEmailConfirm', ''); }
+
+    function validate(current) {
+      const errors = {};
+      (STEP_FIELDS[current] || []).forEach((name) => { if (!val(name)) errors[name] = 'กรุณากรอก' + NAMES[name]; });
+      if (current === 1) {
+        if (val('postcode') && !/^\d{5}$/.test(val('postcode'))) errors.postcode = 'ตัวเลข 5 หลัก';
+        if (val('schoolEmail') && !EMAIL.test(val('schoolEmail'))) errors.schoolEmail = 'รูปแบบอีเมลไม่ถูกต้อง';
+        ['students', 'teachers'].forEach((name) => { if (val(name) && !/^\d+$/.test(val(name))) errors[name] = 'กรอกเป็นตัวเลข'; });
+      }
+      if (current === 2) {
+        if (val('adminEmail') && !EMAIL.test(val('adminEmail'))) errors.adminEmail = 'รูปแบบอีเมลไม่ถูกต้อง';
+        if (val('adminEmail').toLowerCase() !== val('adminEmailConfirm').toLowerCase()) errors.adminEmailConfirm = 'อีเมลทั้งสองช่องไม่ตรงกัน';
+      }
+      if (current === 3) {
+        if (!signature) errors.signature = 'กรุณาลงลายมือชื่อผู้อำนวยการ';
+        if (!form.elements.consent.checked) errors.consent = 'กรุณายอมรับข้อตกลงการใช้งาน';
+      }
+      Object.keys(NAMES).concat(['schoolEmail', 'students', 'teachers', 'adminEmailConfirm', 'signature', 'consent']).forEach((name) => setError(name, errors[name] || ''));
+      const first = Object.keys(errors)[0];
+      if (first && form.elements[first] && form.elements[first].focus) form.elements[first].focus();
+      return !first;
+    }
+
+    function go(next) {
+      step = next;
+      $$('[data-step]').forEach((set) => { set.hidden = Number(set.dataset.step) !== step; });
+      $$('[data-step-tab]').forEach((tab) => {
+        const index = Number(tab.dataset.stepTab);
+        tab.classList.toggle('on', index === step);
+        tab.classList.toggle('done', index < step);
+      });
+      $('#back').hidden = step === 1;
+      $('#next').hidden = step === 3;
+      $('#send').hidden = step !== 3;
+      if (step === 3) sizePad();
+      render();
+      document.querySelector('.form-side').scrollIntoView({ block: 'start' });
+    }
+    $('#next').addEventListener('click', () => { if (validate(step)) go(step + 1); });
+    $('#back').addEventListener('click', () => go(step - 1));
+
+    // ---------- ลายมือชื่อ ----------
+    const pad = $('#pad');
+    const ctx = pad.getContext('2d');
+    let drawing = false;
+    let last = null;
+    let hasInk = false;
+    function sizePad() {
+      const ratio = Math.max(1, window.devicePixelRatio || 1);
+      const rect = pad.getBoundingClientRect();
+      if (!rect.width) return;
+      const keep = hasInk ? pad.toDataURL() : '';
+      pad.width = Math.round(rect.width * ratio);
+      pad.height = Math.round(rect.height * ratio);
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#1d3f91'; ctx.lineWidth = 2.4;
+      if (keep) { const image = new Image(); image.onload = () => ctx.drawImage(image, 0, 0, rect.width, rect.height); image.src = keep; }
+    }
+    const point = (event) => { const rect = pad.getBoundingClientRect(); return { x: event.clientX - rect.left, y: event.clientY - rect.top }; };
+    pad.addEventListener('pointerdown', (event) => { drawing = true; last = point(event); pad.setPointerCapture(event.pointerId); event.preventDefault(); });
+    pad.addEventListener('pointermove', (event) => {
+      if (!drawing) return;
+      const next = point(event);
+      const mid = { x: (last.x + next.x) / 2, y: (last.y + next.y) / 2 };
+      ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.quadraticCurveTo(last.x, last.y, mid.x, mid.y); ctx.lineTo(next.x, next.y); ctx.stroke();
+      last = next; hasInk = true;
+    });
+    const finish = () => { if (!drawing) return; drawing = false; if (hasInk) captureSignature(); };
+    pad.addEventListener('pointerup', finish);
+    pad.addEventListener('pointercancel', finish);
+    pad.addEventListener('pointerleave', finish);
+    $('#clear-sign').addEventListener('click', () => { ctx.clearRect(0, 0, pad.width, pad.height); hasInk = false; signature = ''; render(); });
+
+    // ตัดขอบว่างรอบลายมือชื่อ แล้วเก็บเป็น PNG พื้นโปร่งใส
+    function captureSignature() {
+      const data = ctx.getImageData(0, 0, pad.width, pad.height).data;
+      let minX = pad.width, minY = pad.height, maxX = -1, maxY = -1;
+      for (let y = 0; y < pad.height; y += 1) for (let x = 0; x < pad.width; x += 1) {
+        if (data[(y * pad.width + x) * 4 + 3] > 10) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+      }
+      if (maxX < 0) { signature = ''; render(); return; }
+      const padding = 8;
+      const out = document.createElement('canvas');
+      out.width = maxX - minX + padding * 2; out.height = maxY - minY + padding * 2;
+      out.getContext('2d').drawImage(pad, minX - padding, minY - padding, out.width, out.height, 0, 0, out.width, out.height);
+      signature = out.toDataURL('image/png');
+      setError('signature', '');
+      render();
+    }
+
+    // ภาพลายมือชื่อที่สแกน/ถ่ายไว้: ทำพื้นขาวให้โปร่งใส แล้ววางลงช่องลงนาม
+    $('#sign-file').addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      const image = new Image();
+      image.onload = () => {
+        const rect = pad.getBoundingClientRect();
+        const scale = Math.min((rect.width - 20) / image.width, (rect.height - 20) / image.height, 1);
+        const temp = document.createElement('canvas');
+        temp.width = Math.round(image.width * scale); temp.height = Math.round(image.height * scale);
+        const tctx = temp.getContext('2d');
+        tctx.drawImage(image, 0, 0, temp.width, temp.height);
+        const pixels = tctx.getImageData(0, 0, temp.width, temp.height);
+        for (let index = 0; index < pixels.data.length; index += 4) {
+          const light = (pixels.data[index] + pixels.data[index + 1] + pixels.data[index + 2]) / 3;
+          if (light > 200) pixels.data[index + 3] = 0;
+        }
+        tctx.putImageData(pixels, 0, 0);
+        ctx.clearRect(0, 0, pad.width, pad.height);
+        ctx.drawImage(temp, (rect.width - temp.width) / 2, (rect.height - temp.height) / 2);
+        hasInk = true;
+        captureSignature();
+        URL.revokeObjectURL(image.src);
+      };
+      image.src = URL.createObjectURL(file);
+      event.target.value = '';
+    });
+
+    // ---------- สร้าง PDF และส่ง ----------
+    function call(action, data) {
+      return new Promise((resolve) => {
+        google.script.run.withSuccessHandler((response) => resolve(response || { ok: false, error: { message: 'ไม่ได้รับข้อมูลจากเซิร์ฟเวอร์' } }))
+          .withFailureHandler((error) => resolve({ ok: false, error: { code: 'NETWORK_ERROR', message: 'ติดต่อเซิร์ฟเวอร์ไม่ได้ ' + (error && error.message || '') } }))
+          .api({ action, data, tenant: '' });
+      });
+    }
+
+    async function buildPdf() {
+      if (!window.html2canvas || !window.jspdf) throw new Error('โหลดเครื่องมือสร้าง PDF ไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่');
+      if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      const host = $('#capture');
+      host.innerHTML = pageOne() + pageTwo() + pageThree();
+      await Promise.all($$('img', host).map((img) => img.complete ? null : new Promise((resolve) => { img.onload = img.onerror = resolve; })));
+      const doc = new window.jspdf.jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
+      const pages = $$('.page', host);
+      pages.forEach(fit);
+      for (let index = 0; index < pages.length; index += 1) {
+        const canvas = await window.html2canvas(pages[index], { scale: 2, backgroundColor: '#ffffff', logging: false, useCORS: true });
+        if (index > 0) doc.addPage();
+        doc.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, 210, 297);
+      }
+      host.innerHTML = '';
+      doc.setProperties({ title: 'หนังสือขอใช้ระบบบริหารจัดการสถานศึกษา - ' + val('schoolName') });
+      pdfUrl = URL.createObjectURL(doc.output('blob'));
+      return doc.output('datauristring').split(',')[1];
+    }
+
+    function mark(name, state) { const row = $(`[data-p="${name}"]`); row.classList.toggle('on', state === 'on'); row.classList.toggle('ok', state === 'ok'); }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!validate(3)) return;
+      const send = $('#send');
+      send.disabled = true; $('#back').disabled = true;
+      $('#form-error').textContent = '';
+      $('#progress').hidden = false;
+      let pdf = '';
+      try { mark('pdf', 'on'); pdf = await buildPdf(); mark('pdf', 'ok'); }
+      catch (error) { mark('pdf', ''); $('#form-error').textContent = error.message || 'สร้างไฟล์ PDF ไม่สำเร็จ'; send.disabled = false; $('#back').disabled = false; return; }
+      mark('send', 'on');
+      const response = await call('registry.submit', Object.assign(values(), { consent: form.elements.consent.checked, signature, pdf }));
+      if (!response.ok) {
+        mark('send', '');
+        send.disabled = false; $('#back').disabled = false;
+        const errors = (response.error && response.error.fieldErrors) || {};
+        Object.keys(errors).forEach((name) => setError(name, errors[name]));
+        $('#form-error').textContent = response.error && response.error.message || 'ส่งคำขอไม่สำเร็จ';
+        const firstStep = Object.keys(errors).map((name) => STEP_FIELDS[1].includes(name) ? 1 : STEP_FIELDS[2].includes(name) ? 2 : 3).sort()[0];
+        if (firstStep && firstStep !== 3) go(firstStep);
+        return;
+      }
+      mark('send', 'ok');
+      done(response.data);
+    });
+
+    function done(result) {
+      form.hidden = true;
+      $$('[data-step-tab]').forEach((tab) => { tab.classList.remove('on'); tab.classList.add('done'); });
+      const box = $('#result');
+      box.hidden = false;
+      box.innerHTML = result.installed
+        ? `<h2>ติดตั้งระบบของโรงเรียนเรียบร้อย</h2>
+           <p>ส่งลิงก์เข้าระบบ ชื่อผู้ใช้ และรหัสผ่านไปที่ <span class="mail">${esc(result.email)}</span> แล้ว หากไม่พบในกล่องจดหมาย ให้ดูที่จดหมายขยะ (Spam)</p>
+           <p>เข้าใช้ครั้งแรก ระบบจะให้ตั้งรหัสผ่านใหม่ทันที</p>`
+        : `<h2>ได้รับคำขอแล้ว</h2>
+           <p>${esc(result.message || 'ผู้ดูแลระบบกลางจะตรวจสอบหนังสือและติดตั้งระบบให้')} เมื่อเสร็จแล้วจะส่งลิงก์ ชื่อผู้ใช้ และรหัสผ่านไปที่ <span class="mail">${esc(result.email)}</span></p>`;
+      box.innerHTML += `<p>เลขคำขอ <strong>${esc(result.requestNo)}</strong></p>
+        ${pdfUrl ? `<p><a class="btn" href="${pdfUrl}" download="หนังสือขอใช้ระบบ.pdf" target="_blank" rel="noopener">ดาวน์โหลดหนังสือที่ลงนามแล้ว (PDF)</a></p>` : ''}`;
+      // ประทับตรารับหนังสือบนตัวอย่าง
+      const stamp = `<div class="stamp drop">รับแล้ว<small>เลขที่ ${esc(result.requestNo)}</small><small>${thaiDate(new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10))}</small></div>`;
+      sheet = 1;
+      render();
+      setTimeout(() => {
+        $$('.frame > .page.one').forEach((page) => page.insertAdjacentHTML('beforeend', stamp));
+        const mobile = $('#mobile-letter');
+        if (mobile.offsetParent === null && window.innerWidth <= 960) { box.insertAdjacentHTML('beforeend', '<div id="done-letter"></div>'); renderInto($('#done-letter'), [pageOne()]); $$('#done-letter .page').forEach((page) => page.insertAdjacentHTML('beforeend', stamp)); }
+      }, 60);
+    }
+
+    // ตราครุฑ (ดึงผ่านเซิร์ฟเวอร์)
+    call('registry.assets', {}).then((response) => { if (response.ok && response.data.garuda) { garuda = response.data.garuda; render(); } });
+    render();
+  })();
+  </script>
+</body>
+</html>

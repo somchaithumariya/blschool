@@ -1,0 +1,474 @@
+<script>
+/**
+ * ผู้ใช้และสิทธิ์: ผู้ใช้งาน, บทบาทและสิทธิ์, บันทึกการใช้งาน และการปิดปีการศึกษา
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+
+  // ---------- ผู้ใช้งาน ----------
+  App.register('#/users', async () => {
+    const response = await App.call('users.list');
+    if (!response.ok) return App.renderError(response.error);
+    const { users, roles } = response.data;
+    const roleName = (key) => (roles.find((role) => role.key === key) || {}).name || key;
+    const pending = users.filter((user) => user.registrationStatus === 'pending');
+    const active = users.filter((user) => user.registrationStatus !== 'pending');
+    App.content(`${pending.length ? `<section class="panel" style="border-color:#bfdbfe"><div class="panel-head"><div>
+        <h2><i class="fa-solid fa-user-clock c-blue"></i> ผู้สมัครรออนุมัติ</h2><p>${pending.length} คน · อนุมัติแล้วผู้สมัครจะเข้าสู่ระบบได้ทันที</p></div></div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>วันที่สมัคร</th><th>ชื่อผู้ใช้</th><th>ชื่อ-นามสกุล</th><th>โทรศัพท์</th><th>อีเมล</th><th></th></tr></thead>
+        <tbody>${pending.map((user) => `<tr><td>${App.fmtDateTime(user.createdAt)}</td><td>${esc(user.username)}</td><td>${esc(user.displayName)}</td>
+          <td>${esc(user.phone)}</td><td>${esc(user.email)}</td><td class="actions">${App.can('user.edit') ? `
+          <button type="button" class="primary-button" data-approve="${attr(user.id)}"><i class="fa-solid fa-check"></i> อนุมัติ</button>
+          <button type="button" class="secondary-button" data-reject="${attr(user.id)}">ปฏิเสธ</button>` : ''}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-users c-rose"></i> ผู้ใช้งาน</h2><p>ทั้งหมด ${active.length} บัญชี</p></div>
+      ${App.can('user.add') ? '<div class="actions"><button type="button" class="primary-button" data-add><i class="fa-solid fa-user-plus"></i> เพิ่มผู้ใช้</button> <button type="button" class="secondary-button" data-bulk><i class="fa-solid fa-users-gear"></i> สร้างบัญชีให้บุคลากรทั้งหมด</button></div>' : ''}</div>
+      <div class="toolbar"><label class="grow">ค้นหา<input type="search" data-search placeholder="ชื่อผู้ใช้ หรือชื่อที่แสดง"></label></div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>บุคลากร</th><th>บทบาท</th><th>สถานะ</th><th></th></tr></thead>
+        <tbody>${active.map((user) => `<tr data-row="${attr((user.username + ' ' + user.displayName).toLowerCase())}"><td>${esc(user.username)}</td><td>${esc(user.displayName)}</td>
+          <td>${esc(App.personName(user.personnelId) || '-')}</td><td>${user.roles.map((key) => `<span class="badge info">${esc(roleName(key))}</span>`).join(' ')}</td>
+          <td>${user.isActive ? '<span class="badge success">ใช้งาน</span>' : '<span class="badge danger">ปิดใช้งาน</span>'} ${user.mustChangePassword ? '<span class="badge warning">รอเปลี่ยนรหัส</span>' : ''}</td>
+          <td class="actions">${App.can('user.edit') ? `<button type="button" class="ghost-button" data-edit="${attr(user.id)}" title="แก้ไข"><i class="fa-solid fa-pen"></i></button>
+            <button type="button" class="ghost-button" data-reset="${attr(user.id)}" title="ตั้งรหัสผ่านใหม่"><i class="fa-solid fa-key"></i></button>` : ''}
+            ${App.can('user.delete') && user.id !== App.state.user.id ? `<button type="button" class="ghost-button danger" data-delete="${attr(user.id)}" title="ลบ"><i class="fa-solid fa-trash"></i></button>` : ''}</td></tr>`).join('')}</tbody></table></div></section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-search]').addEventListener('input', (event) => {
+      const q = event.target.value.trim().toLowerCase();
+      root.querySelectorAll('tr[data-row]').forEach((row) => { row.classList.toggle('hidden', q && !row.dataset.row.includes(q)); });
+    });
+    const find = (id) => users.find((user) => user.id === id);
+    const add = root.querySelector('[data-add]');
+    if (add) add.addEventListener('click', () => openUserForm(null, roles));
+    const bulk = root.querySelector('[data-bulk]');
+    if (bulk) bulk.addEventListener('click', () => openBulkCreate(roles));
+    root.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => openUserForm(find(button.dataset.edit), roles)));
+    root.querySelectorAll('[data-approve]').forEach((button) => button.addEventListener('click', () => openApproveForm(find(button.dataset.approve), roles)));
+    root.querySelectorAll('[data-reject]').forEach((button) => button.addEventListener('click', async () => {
+      const user = find(button.dataset.reject);
+      if (!confirm(`ปฏิเสธคำขอสมัครของ ${user.displayName}?`)) return;
+      const result = await App.call('users.reject', { id: user.id });
+      if (result.ok) { App.toast('ปฏิเสธคำขอแล้ว', 'success'); App.forget('dashboard'); App.route(); }
+    }));
+    root.querySelectorAll('[data-reset]').forEach((button) => button.addEventListener('click', () => openResetForm(find(button.dataset.reset))));
+    root.querySelectorAll('[data-delete]').forEach((button) => button.addEventListener('click', async () => {
+      const user = find(button.dataset.delete);
+      if (!confirm(`ยืนยันการลบผู้ใช้ ${user.username}?`)) return;
+      const result = await App.call('users.delete', { id: user.id });
+      if (result.ok) { App.toast('ลบผู้ใช้แล้ว', 'success'); App.route(); }
+    }));
+  });
+
+  function openUserForm(user, roles) {
+    const value = user || { isActive: true, roles: ['teacher'] };
+    const body = App.openModal(user ? 'แก้ไขผู้ใช้' : 'เพิ่มผู้ใช้', `<form class="form-grid" novalidate>
+      <label>ชื่อผู้ใช้ *<input name="username" value="${attr(value.username || '')}" autocomplete="off" required><small class="field-error" data-error-for="username"></small></label>
+      <label>ชื่อที่แสดง *<input name="displayName" value="${attr(value.displayName || '')}" required><small class="field-error" data-error-for="displayName"></small></label>
+      <label>อีเมล<input name="email" type="email" value="${attr(value.email || '')}"></label>
+      <label>เชื่อมกับบุคลากร<select name="personnelId">${App.options('personnel', value.personnelId, { empty: '— ไม่เชื่อม —' })}</select><small class="field-error" data-error-for="personnelId"></small></label>
+      ${user ? '' : '<label>รหัสผ่านเริ่มต้น *<input name="password" type="text" autocomplete="off" required><small class="field-error" data-error-for="password"></small></label>'}
+      <label class="check-row"><input type="checkbox" name="isActive" ${value.isActive ? 'checked' : ''}> เปิดใช้งาน<small class="field-error" data-error-for="isActive"></small></label>
+      <fieldset class="wide" style="border:1px solid var(--slate-200);border-radius:10px;padding:12px"><legend>บทบาท *</legend>
+        ${roles.map((role) => `<label class="check-row"><input type="checkbox" name="roles" value="${attr(role.key)}" ${value.roles.includes(role.key) ? 'checked' : ''}> ${esc(role.name)}</label>`).join('')}
+        <small class="field-error" data-error-for="roles"></small></fieldset>
+      ${user ? '' : '<p class="muted wide">ผู้ใช้ใหม่จะถูกบังคับให้เปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งแรก</p>'}
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button><button type="submit" class="primary-button">บันทึก</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const values = { username: form.elements.username.value, displayName: form.elements.displayName.value, email: form.elements.email.value,
+        personnelId: form.elements.personnelId.value, isActive: form.elements.isActive.checked,
+        roles: [...form.querySelectorAll('[name=roles]:checked')].map((input) => input.value) };
+      if (!user) values.password = form.elements.password.value;
+      const result = await App.call('users.save', { id: user && user.id, version: user && user.version, values }, { quiet: true });
+      if (!result.ok) { App.showErrors(form, result.error); App.toast(result.error.message, 'error'); return; }
+      App.closeModal(); App.toast('บันทึกผู้ใช้แล้ว', 'success'); App.route();
+    });
+  }
+
+  function openApproveForm(user, roles) {
+    const body = App.openModal('อนุมัติ: ' + user.displayName, `<form class="form-grid" novalidate>
+      <p class="wide muted">ชื่อผู้ใช้ ${esc(user.username)} · โทร ${esc(user.phone || '-')} · ${esc(user.email || '-')}</p>
+      <label class="wide">เชื่อมกับบุคลากร<select name="personnelId">${App.options('personnel', '', { empty: '— ไม่เชื่อม —' })}</select></label>
+      <fieldset class="wide" style="border:1px solid var(--slate-200);border-radius:10px;padding:12px"><legend>บทบาท *</legend>
+        ${roles.map((role) => `<label class="check-row"><input type="checkbox" name="roles" value="${attr(role.key)}" ${role.key === 'teacher' ? 'checked' : ''}> ${esc(role.name)}</label>`).join('')}
+        <small class="field-error" data-error-for="roles"></small></fieldset>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button><button type="submit" class="primary-button">อนุมัติ</button></div></form>`);
+    const form = body.querySelector('form');
+    const match = App.lookupList('personnel').find((person) => person.label.replace(/\s+/g, '').includes(user.displayName.replace(/\s+/g, '')));
+    if (match) form.elements.personnelId.value = match.id;
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const result = await App.call('users.approve', { id: user.id, personnelId: form.elements.personnelId.value,
+        roles: [...form.querySelectorAll('[name=roles]:checked')].map((input) => input.value) }, { quiet: true });
+      if (!result.ok) { App.showErrors(form, result.error); App.toast(result.error.message, 'error'); return; }
+      App.closeModal(); App.forget('dashboard'); App.toast('อนุมัติแล้ว', 'success'); App.route();
+    });
+  }
+
+  // สร้างบัญชีให้บุคลากรทั้งหมดที่ยังไม่มีบัญชี แล้วแสดงรายชื่อ/รหัสผ่านเริ่มต้นให้พิมพ์แจก (แสดงครั้งเดียว)
+  async function openBulkCreate(roles) {
+    const info = await App.call('users.candidates');
+    if (!info.ok) return;
+    const list = info.data.candidates;
+    if (!list.length) { App.toast('บุคลากรทุกคนมีบัญชีแล้ว', 'success'); return; }
+    const body = App.openModal('สร้างบัญชีให้บุคลากรทั้งหมด', `<div class="form-grid">
+      <p class="wide">มีบุคลากร <strong>${list.length} คน</strong> ที่ยังไม่มีบัญชี ระบบจะสร้างชื่อผู้ใช้จากรหัสบุคลากร และสุ่มรหัสผ่านเริ่มต้นให้แต่ละคน<br>
+        <small class="muted">เมื่อครูเข้าสู่ระบบครั้งแรก ระบบจะบังคับให้ตั้งรหัสผ่านใหม่ของตัวเองทันที</small></p>
+      <label class="wide">บทบาทที่ให้<select name="role">${roles.filter((role) => role.key !== 'admin').map((role) => `<option value="${attr(role.key)}" ${role.key === 'teacher' ? 'selected' : ''}>${esc(role.name)}</option>`).join('')}</select></label>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ปิด</button><button type="button" class="primary-button" data-go><i class="fa-solid fa-user-plus"></i> สร้างบัญชี</button></div>
+      <div class="wide" data-result></div></div>`);
+    body.querySelector('[data-cancel]').addEventListener('click', () => { App.closeModal(); App.route(); });
+    const go = body.querySelector('[data-go]');
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      const role = body.querySelector('[name=role]').value;
+      const made = [];
+      for (let start = 0; start < list.length; start += 12) {
+        go.textContent = 'กำลังสร้าง ' + Math.min(start + 12, list.length) + '/' + list.length + ' …';
+        const result = await App.call('users.bulkCreate', { role, personnelIds: list.slice(start, start + 12).map((item) => item.id) }, { silent: true });
+        if (!result.ok) break;
+        made.push(...result.data.created);
+      }
+      go.hidden = true;
+      const csv = '﻿ชื่อผู้ใช้,ชื่อ-นามสกุล,รหัสผ่านเริ่มต้น\n' + made.map((item) => [item.username, item.displayName, item.password].join(',')).join('\n');
+      body.querySelector('[data-result]').innerHTML = `<p><strong>สร้างแล้ว ${made.length} บัญชี</strong> — <span class="c-rose">บันทึกหรือพิมพ์รายชื่อนี้ตอนนี้ เพราะจะไม่แสดงรหัสผ่านอีก</span></p>
+        <div class="actions"><button type="button" class="primary-button" data-csv><i class="fa-solid fa-file-arrow-down"></i> ดาวน์โหลด CSV</button>
+          <button type="button" class="secondary-button" data-print><i class="fa-solid fa-print"></i> พิมพ์</button></div>
+        <div class="table-wrap" style="max-height:40vh"><table class="data-table"><thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อ</th><th>รหัสผ่านเริ่มต้น</th></tr></thead>
+          <tbody>${made.map((item) => `<tr><td>${esc(item.username)}</td><td>${esc(item.displayName)}</td><td><code>${esc(item.password)}</code></td></tr>`).join('')}</tbody></table></div>`;
+      body.querySelector('[data-csv]').addEventListener('click', () => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+        link.download = 'บัญชีผู้ใช้ใหม่.csv'; link.click();
+      });
+      body.querySelector('[data-print]').addEventListener('click', () => {
+        const win = window.open('', '_blank');
+        if (!win) { App.toast('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ กรุณาดาวน์โหลด CSV แทน', 'error'); return; }
+        win.document.write('<meta charset="utf-8"><title>บัญชีผู้ใช้</title><style>body{font-family:sans-serif}td,th{border:1px solid #999;padding:6px 10px}table{border-collapse:collapse}</style><h3>บัญชีผู้ใช้ระบบโรงเรียน</h3><table><tr><th>ชื่อผู้ใช้</th><th>ชื่อ</th><th>รหัสผ่านเริ่มต้น</th></tr>'
+          + made.map((item) => '<tr><td>' + esc(item.username) + '</td><td>' + esc(item.displayName) + '</td><td>' + esc(item.password) + '</td></tr>').join('') + '</table>');
+        win.document.close(); win.print();
+      });
+    });
+  }
+
+  function openResetForm(user) {
+    const body = App.openModal('ตั้งรหัสผ่านใหม่: ' + user.username, `<form class="form-grid" novalidate>
+      <label class="wide">รหัสผ่านใหม่ (ผู้ใช้ต้องเปลี่ยนเมื่อเข้าสู่ระบบครั้งถัดไป)<input name="password" type="text" autocomplete="off" required><small class="field-error" data-error-for="password"></small></label>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button><button type="submit" class="primary-button">บันทึก</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const result = await App.call('users.resetPassword', { id: user.id, password: form.elements.password.value }, { quiet: true });
+      if (!result.ok) { App.showErrors(form, result.error); return; }
+      App.closeModal(); App.toast('ตั้งรหัสผ่านใหม่แล้ว', 'success'); App.route();
+    });
+  }
+
+  // ---------- บทบาทและสิทธิ์ ----------
+  App.register('#/roles', async () => {
+    const response = await App.call('roles.list');
+    if (!response.ok) return App.renderError(response.error);
+    const { roles, modules, permissions, canEdit } = response.data;
+    const editable = roles.filter((role) => role.key !== 'admin');
+    const groups = App.state.groups.filter((group) => group.key !== 'top');
+    const extra = permissions.filter((key) => !modules.some((module) => module.permission === key));
+    const cell = (role, key) => role.key === 'admin' ? '<i class="fa-solid fa-check c-green"></i>'
+      : `<input type="checkbox" data-role="${attr(role.id)}" value="${attr(key)}" ${role.permissions.includes(key) ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>`;
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-shield c-rose"></i> บทบาทและสิทธิ์</h2>
+      <p>ติ๊กเพื่อให้บทบาทเห็นเมนู (สิทธิ์ดู) ส่วนสิทธิ์แก้ไขอยู่ในตารางด้านล่าง ผู้ดูแลระบบได้รับทุกสิทธิ์เสมอ</p></div>
+      ${canEdit ? '<div class="actions"><button type="button" class="secondary-button" data-new><i class="fa-solid fa-plus"></i> เพิ่มบทบาท</button><button type="button" class="primary-button" data-save><i class="fa-solid fa-floppy-disk"></i> บันทึกสิทธิ์</button></div>' : ''}</div>
+      <div class="table-wrap"><table class="data-table role-matrix"><thead><tr><th>เมนู (สิทธิ์ดู)</th>${roles.map((role) => `<th>${esc(role.name)}</th>`).join('')}</tr></thead>
+        <tbody>${groups.map((group) => {
+          const items = modules.filter((module) => module.category === group.key);
+          return `<tr><th colspan="${roles.length + 1}" style="background:#eef2f8">${esc(group.name)}</th></tr>` + items.map((module) =>
+            `<tr><td>${esc(module.name)} <small class="muted">${esc(module.permission)}</small></td>${roles.map((role) => `<td>${cell(role, module.permission)}</td>`).join('')}</tr>`).join('');
+        }).join('')}
+        <tr><th colspan="${roles.length + 1}" style="background:#eef2f8">สิทธิ์แก้ไขและการกระทำ</th></tr>
+        ${extra.map((key) => `<tr><td>${esc(permissionLabel(key))} <small class="muted">${esc(key)}</small></td>${roles.map((role) => `<td>${cell(role, key)}</td>`).join('')}</tr>`).join('')}
+        </tbody></table></div></section>`);
+    const root = document.getElementById('page-content');
+    const save = root.querySelector('[data-save]');
+    if (save) save.addEventListener('click', async () => {
+      for (const role of editable) {
+        const selected = [...root.querySelectorAll(`[data-role="${CSS.escape(role.id)}"]:checked`)].map((input) => input.value);
+        const unique = [...new Set(selected)];
+        const result = await App.call('roles.save', { id: role.id, name: role.name, permissions: unique });
+        if (!result.ok) return;
+      }
+      App.toast('บันทึกสิทธิ์แล้ว ผู้ใช้จะเห็นผลเมื่อโหลดหน้าใหม่', 'success');
+      App.route();
+    });
+    // ติ๊กสิทธิ์เดียวกันที่อยู่หลายแถว (เช่นเมนูที่ใช้สิทธิ์ร่วมกัน) ให้ตรงกัน
+    root.querySelectorAll('[data-role]').forEach((input) => input.addEventListener('change', () => {
+      root.querySelectorAll(`[data-role="${CSS.escape(input.dataset.role)}"][value="${CSS.escape(input.value)}"]`).forEach((other) => { other.checked = input.checked; });
+    }));
+    const add = root.querySelector('[data-new]');
+    if (add) add.addEventListener('click', () => {
+      const body = App.openModal('เพิ่มบทบาท', `<form class="form-grid" novalidate>
+        <label>รหัสบทบาท (a-z)<input name="key" placeholder="เช่น registrar" required><small class="field-error" data-error-for="key"></small></label>
+        <label>ชื่อบทบาท<input name="name" placeholder="เช่น งานทะเบียน" required><small class="field-error" data-error-for="name"></small></label>
+        <div class="form-actions wide"><button type="submit" class="primary-button">เพิ่ม</button></div></form>`);
+      const form = body.querySelector('form');
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const result = await App.call('roles.save', { key: form.elements.key.value, name: form.elements.name.value, permissions: ['dashboard.view'] }, { quiet: true });
+        if (!result.ok) { App.showErrors(form, result.error); App.toast(result.error.message, 'error'); return; }
+        App.closeModal(); App.route();
+      });
+    });
+  });
+
+  function permissionLabel(key) {
+    const labels = { 'settings.edit': 'แก้ไขข้อมูลโรงเรียน', 'module.toggle': 'เปิด/ปิดเมนู', 'master.edit': 'แก้ไขข้อมูลหลัก', 'academicYear.edit': 'แก้ไขปีการศึกษา',
+      'user.add': 'เพิ่มผู้ใช้', 'user.edit': 'แก้ไขผู้ใช้/ตั้งรหัสผ่าน', 'user.delete': 'ลบผู้ใช้', 'role.edit': 'แก้ไขบทบาทและสิทธิ์',
+      'attendance.add': 'บันทึกการเช็กชื่อ', 'attendance.edit': 'แก้ไขการเช็กชื่อที่บันทึกแล้ว', 'attendance.submit': 'ส่งการเช็กชื่อ',
+      'attendance.review': 'ตรวจสอบการเช็กชื่อ', 'attendance.approve': 'อนุมัติการเช็กชื่อ', 'porpor5.grade': 'กรอกคะแนน ปพ.5', 'sos.manage': 'รับแจ้งเหตุ SOS', 'safety.manage': 'ทีมความปลอดภัย: มอบหมาย/ปิดเรื่องเหตุและจุดเสี่ยง', 'concern.edit': 'ห้องรับฟัง: ตอบกลับนักเรียน/จัดการเรื่อง (ให้เฉพาะครูแนะแนวและผู้บริหาร)', 'review.approve': 'ลงนาม/ให้ความเห็นรายงานที่ครูส่ง (ผู้บริหาร)',
+      'texts.edit': 'แก้ไขข้อความบนหน้าจอ (ชื่อเมนู หัวตาราง คำอธิบายหน้า)', 'aiSettings.edit': 'แก้ไขการตั้งค่า AI', 'checkinReport.manage': 'แก้ไข/เพิ่มการลงเวลาแทนผู้อื่น', 'leave.approve': 'อนุมัติ/ไม่อนุมัติการลาและไปราชการ' };
+    if (labels[key]) return labels[key];
+    const module = App.state.modules.find((item) => item.permission === key.replace(/\.edit$/, '.view'));
+    return module ? 'แก้ไข' + module.name : key;
+  }
+
+  // ---------- บันทึกการใช้งาน ----------
+  App.register('#/audit-logs', async () => {
+    const response = await App.call('report.audit', {});
+    if (!response.ok) return App.renderError(response.error);
+    const rows = response.data.rows;
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-clock-rotate-left"></i> บันทึกการใช้งาน</h2><p>500 รายการล่าสุด</p></div></div>
+      <div class="toolbar"><label class="grow">ค้นหา<input type="search" data-search placeholder="เช่น LOGIN, Students, ชื่อผู้ใช้"></label></div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>เวลา</th><th>ผู้ใช้</th><th>การกระทำ</th><th>ตาราง</th></tr></thead>
+        <tbody>${rows.map((row) => `<tr data-row="${attr((row.user + ' ' + row.action + ' ' + row.entityType).toLowerCase())}"><td>${App.fmtDateTime(row.createdAt)}</td>
+          <td>${esc(row.user)}</td><td><span class="badge info">${esc(row.action)}</span></td><td>${esc(row.entityType)}</td></tr>`).join('')
+          || '<tr><td colspan="4" class="empty-row">ยังไม่มีข้อมูล</td></tr>'}</tbody></table></div></section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-search]').addEventListener('input', (event) => {
+      const q = event.target.value.trim().toLowerCase();
+      root.querySelectorAll('tr[data-row]').forEach((row) => { row.classList.toggle('hidden', q && !row.dataset.row.includes(q)); });
+    });
+  });
+  // ---------- ปิดปีการศึกษา ----------
+  App.register('#/year-close', async () => {
+    const terms = (App.state.lookups && App.state.lookups.academicYears) || [];
+    const years = [...new Set(terms.map((item) => String(item.year)))].sort().reverse();
+    const termOptions = terms.map((term) => `<option value="${attr(term.id)}">${esc(term.label)}</option>`).join('');
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-box-archive c-amber"></i> ปิดปีการศึกษา</h2>
+        <p>ทำเมื่อจบปีการศึกษา เพื่อเก็บข้อมูลทั้งปีไว้ใน Google Drive และทำให้ระบบกลับมาเร็วเหมือนเริ่มใหม่ <strong>ไม่มีข้อมูลหาย</strong></p></div></div>
+      <div class="close-steps">
+        <div><i class="fa-solid fa-cloud-arrow-up c-sky"></i><strong>1. เก็บถาวร</strong><small>สร้างไฟล์ Google Sheet “เก็บถาวร ปีการศึกษา …” ในโฟลเดอร์ “เก็บถาวรรายปีการศึกษา” มีข้อมูลทุกโมดูลของปีนั้น</small></div>
+        <div><i class="fa-solid fa-broom c-violet"></i><strong>2. เลือกเก็บหรือย้ายออกรายเรื่อง</strong><small>เลือกได้ทุกเรื่อง เช่น การมาเรียน ลงเวลา ผลการเรียน งานดูแลนักเรียน ความปลอดภัย การประเมิน ว.23 ระบบหลักจะเบาลงเหมือนเริ่มใหม่</small></div>
+        <div><i class="fa-solid fa-stairs c-green"></i><strong>3. เลื่อนชั้น</strong><small>สร้างปีการศึกษาใหม่ ห้องเรียนชั้นถัดไป ย้ายนักเรียนพร้อมเลขที่ และตั้งสถานะ “จบการศึกษา” ให้ชั้นสุดท้าย</small></div>
+      </div></section>
+      <section class="panel" id="close-panel"><div class="panel-head"><div><h2><i class="fa-solid fa-list-check c-blue"></i> ตรวจสอบก่อนปิดปี</h2>
+        <p>ระบบจะแสดงสิ่งที่จะเกิดขึ้นทั้งหมดก่อน ยังไม่มีการเปลี่ยนแปลงจนกว่าจะพิมพ์ยืนยันและกดปุ่ม</p></div></div>
+        ${years.length ? `<div class="toolbar"><label>ปีการศึกษาที่จะปิด<select data-year>${years.map((year) => `<option>${esc(year)}</option>`).join('')}</select></label>
+          <div class="actions"><button type="button" class="primary-button" data-preview><i class="fa-solid fa-magnifying-glass"></i> ตรวจสอบ</button></div></div>
+          <div data-plan></div>` : '<p class="muted">ยังไม่มีปีการศึกษา</p>'}</section>
+      <section class="panel" id="term-panel"><div class="panel-head"><div><h2><i class="fa-solid fa-right-long c-teal"></i> ขึ้นภาคเรียนใหม่ (ชั้นเดิม)</h2>
+        <p>คัดลอกห้องเรียน ครูที่ปรึกษา และนักเรียนพร้อมเลขที่ จากภาคเรียนที่ 1 ไปภาคเรียนที่ 2 (สร้างภาคเรียนปลายทางที่เมนู “ปีการศึกษา” ก่อน)</p></div></div>
+        <div class="toolbar"><label>จากภาคเรียน<select data-source>${termOptions}</select></label>
+          <label>ไปภาคเรียน<select data-target>${termOptions}</select></label>
+          <label class="check-row"><input type="checkbox" data-term-advisors checked> คัดลอกครูที่ปรึกษา</label>
+          <label class="check-row"><input type="checkbox" data-term-active checked> ตั้งเป็นภาคเรียนปัจจุบัน</label>
+          <div class="actions"><button type="button" class="secondary-button" data-term-check>ตรวจสอบ</button></div></div><div data-term-result></div></section>
+      <section class="panel" id="close-history"><div class="panel-head"><div><h2><i class="fa-solid fa-clock-rotate-left c-slate"></i> ประวัติการปิดปี</h2></div></div>
+        <div data-history><p class="muted">กำลังโหลด...</p></div></section>`);
+    const panel = document.getElementById('close-panel');
+    if (years.length) {
+      const select = panel.querySelector('[data-year]');
+      // ค่าเริ่มต้น: ปีก่อนปีล่าสุด (ปีที่เพิ่งจบ) ถ้ามี
+      select.value = years[years.length > 1 ? 1 : 0];
+      panel.querySelector('[data-preview]').addEventListener('click', () => loadPlan(select.value, ''));
+      loadPlan(select.value, '');
+    }
+    bindTermCopy(document.getElementById('term-panel'));
+    loadHistory();
+  });
+
+  async function loadPlan(year, finalGrade, keepActions) {
+    const box = document.querySelector('#close-panel [data-plan]');
+    if (!box) return;
+    const response = await App.call('yearClose.preview', { year, finalGrade });
+    if (!response.ok) { box.innerHTML = `<p class="form-error">${esc(response.error.message)}</p>`; return; }
+    const p = response.data;
+    const n = (value) => Number(value || 0).toLocaleString('th-TH');
+    const phrase = 'ปิดปีการศึกษา ' + p.year;
+    const actions = {};
+    p.categories.forEach((item) => { actions[item.key] = (keepActions && keepActions[item.key]) || item.def; });
+    const roomsTable = p.promotion.rooms.length
+      ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>ห้องเดิม</th><th class="num">นักเรียน</th><th>ปีการศึกษา ${esc(p.targetYear)}</th></tr></thead><tbody>
+        ${p.promotion.rooms.map((room) => `<tr><td>${esc(room.gradeLevel)}/${esc(room.roomName)}</td><td class="num">${n(room.students)}</td>
+          <td>${room.graduates ? '<span class="badge success"><i class="fa-solid fa-graduation-cap"></i> จบการศึกษา</span>' : esc(room.target)}</td></tr>`).join('')}</tbody></table></div>
+        <p class="muted">เลื่อนชั้น ${n(p.promotion.promoted)} คน · จบการศึกษา ${n(p.promotion.graduated)} คน · นักเรียนใหม่ (เช่น อ.1 ป.1 ม.1) เพิ่มเองที่เมนู “นักเรียนรายห้อง/รายปี”</p>`
+      : '<p class="muted">ไม่มีห้องเรียนในภาคเรียนสุดท้ายของปีนี้ จะไม่มีการเลื่อนชั้น</p>';
+    const groupRows = p.groups.map((group) => {
+      const items = p.categories.filter((item) => item.group === group.key);
+      if (!items.length) return '';
+      return `<tr class="group-row"><th colspan="3"><i class="fa-solid ${attr(group.icon)}"></i> ${esc(group.name)}</th></tr>` + items.map((item) => `
+        <tr class="${item.count ? '' : 'muted-row'}"><td><strong>${esc(item.label)}</strong>${item.note ? `<small class="muted block-note">${esc(item.note)}</small>` : ''}</td>
+          <td class="num">${n(item.count)}</td>
+          <td><div class="seg" data-cat="${attr(item.key)}" role="radiogroup" aria-label="${attr(item.label)}">
+            <button type="button" data-v="keep"><i class="fa-solid fa-box"></i> เก็บไว้ในระบบ</button>
+            <button type="button" data-v="remove"><i class="fa-solid fa-box-archive"></i> ${item.archive ? 'ย้ายออก' : 'ลบ'}</button></div></td></tr>`).join('');
+    }).join('');
+    const inc = p.incomplete;
+    const undoPhrase = inc ? 'ยกเลิกปี ' + inc.targetYear : '';
+    box.innerHTML = `${p.closed ? '<p><span class="badge success"><i class="fa-solid fa-check"></i> ปีการศึกษานี้ปิดไปแล้ว</span></p>' : ''}
+      ${inc ? `<div class="incomplete-box"><h3><i class="fa-solid fa-triangle-exclamation"></i> พบการปิดปี ${esc(p.year)} ที่ทำไม่เสร็จ</h3>
+        <p>ระบบสร้างปี ${esc(inc.terms.join(', '))} ไว้แล้ว (ห้องเรียน ${n(inc.homerooms)} ห้อง · นักเรียน ${n(inc.enrollments)} คน) แต่ยังไม่มีประวัติการปิดปี เลือกได้ 2 ทาง:</p>
+        <ol><li><strong>ทำต่อให้เสร็จ</strong> — กดปุ่ม “ปิดปีการศึกษา” ด้านล่างอีกครั้ง ระบบข้ามห้อง/นักเรียนที่สร้างแล้ว ไม่สร้างซ้ำ</li>
+          <li><strong>ยกเลิกปีที่ค้าง</strong> — ลบปี ${esc(inc.targetYear)} ที่ระบบสร้างไว้ คืนสถานะนักเรียนชั้นสุดท้าย และกลับไปใช้ปี ${esc(p.year)} เป็นปีปัจจุบัน</li></ol>
+        ${inc.canUndo ? `<div class="confirm-box"><label>พิมพ์ <strong>${esc(undoPhrase)}</strong> เพื่อยืนยัน<input data-undo-confirm autocomplete="off" placeholder="${attr(undoPhrase)}"><small class="field-error" data-error-for="undoConfirm"></small></label>
+          <button type="button" class="secondary-button" data-undo disabled><i class="fa-solid fa-rotate-left"></i> ยกเลิกปี ${esc(inc.targetYear)} ที่ค้าง</button></div>`
+        : `<p class="form-error">ยกเลิกอัตโนมัติไม่ได้ เพราะปี ${esc(inc.targetYear)} มีข้อมูลอื่นบันทึกไว้แล้ว: ${esc(inc.otherData.join(', '))} — ให้เลือกทำต่อให้เสร็จ</p>`}</div>` : ''}
+      <p class="muted">ภาคเรียน: ${p.terms.map((term) => esc(term.label)).join(', ')} · ข้อมูลที่ผูกกับวันที่ (ลงเวลา ประวัติการใช้งาน SOS) นับถึงวันที่ ${esc(p.cutoff ? App.fmtDate(p.cutoff) : '-')}</p>
+      <div class="year-close-intro">
+        <div><i class="fa-solid fa-shield-halved c-green"></i> <strong>ทุกเรื่องมีสำเนาในไฟล์เก็บถาวรเสมอ</strong> ไม่ว่าจะเลือก “เก็บไว้” หรือ “ย้ายออก”</div>
+        <div class="actions"><span class="muted">ตั้งค่าเร็ว:</span>
+          <button type="button" class="secondary-button" data-preset="recommended"><i class="fa-solid fa-star"></i> แนะนำ</button>
+          <button type="button" class="secondary-button" data-preset="keep"><i class="fa-solid fa-box"></i> เก็บทั้งหมด</button>
+          <button type="button" class="secondary-button" data-preset="fresh"><i class="fa-solid fa-broom"></i> เริ่มปีใหม่แบบสะอาด</button>
+          <button type="button" class="ghost-button" data-export><i class="fa-solid fa-file-export"></i> ส่งออกทั้งปี (ไม่ปิดปี)</button></div>
+      </div>
+      <div class="table-wrap"><table class="data-table year-close-table"><thead><tr><th>ข้อมูล</th><th class="num">จำนวนแถว</th><th>ทำอะไรในระบบหลัก</th></tr></thead>
+        <tbody>${groupRows}</tbody></table></div>
+      <p class="muted" data-plan-summary></p>
+      <h3 class="subhead"><i class="fa-solid fa-stairs c-green"></i> เลื่อนชั้นไปปีการศึกษา ${esc(p.targetYear)}/1
+        ${p.targetExists ? '<span class="badge info">มีปีนี้แล้ว จะเติมเฉพาะห้อง/นักเรียนที่ยังไม่มี</span>' : '<span class="badge warning">จะสร้างปีการศึกษาใหม่</span>'}</h3>
+      <div class="toolbar"><label class="check-row"><input type="checkbox" class="switch" data-opt="promote" checked> เลื่อนชั้นนักเรียน (จากภาคเรียน ${esc(p.sourceTerm)})</label>
+        <label>ชั้นสุดท้ายของโรงเรียน (จบการศึกษา)<select data-final>${p.gradeLevels.map((level) => `<option ${level === p.finalGrade ? 'selected' : ''}>${esc(level)}</option>`).join('')}</select></label>
+        <label class="check-row"><input type="checkbox" data-opt="copyAdvisors" checked> ใช้ครูที่ปรึกษาเดิม</label>
+        <label class="check-row"><input type="checkbox" data-opt="setActive" checked> ตั้งปีใหม่เป็นปีปัจจุบัน</label></div>
+      ${roomsTable}
+      <div data-export-result></div>
+      ${p.closed ? '' : `<div class="confirm-box"><label>พิมพ์ <strong>${esc(phrase)}</strong> เพื่อยืนยัน<input data-confirm autocomplete="off" placeholder="${attr(phrase)}"><small class="field-error" data-error-for="confirmText"></small></label>
+        <button type="button" class="danger-button" data-run disabled><i class="fa-solid fa-box-archive"></i> ปิดปีการศึกษา ${esc(p.year)}</button>
+        <small class="muted">ใช้เวลาประมาณ 1–5 นาที ห้ามปิดหน้านี้ระหว่างดำเนินการ</small></div>`}`;
+
+    const undoInput = box.querySelector('[data-undo-confirm]');
+    if (undoInput) {
+      const undoButton = box.querySelector('[data-undo]');
+      undoInput.addEventListener('input', () => { undoButton.disabled = undoInput.value.trim() !== undoPhrase; });
+      undoButton.addEventListener('click', async () => {
+        undoButton.disabled = true;
+        const result = await App.call('yearClose.undoIncomplete', { year: p.year, confirmText: undoInput.value }, { quiet: true });
+        if (!result.ok) { undoButton.disabled = false; App.showErrors(box, result.error); App.toast(result.error.message, 'error'); return; }
+        App.toast(`ยกเลิกปี ${result.data.targetYear} แล้ว ปีปัจจุบันคือ ${result.data.activeTerm}`, 'success');
+        await refreshState();
+        loadPlan(p.year, '');
+      });
+    }
+    // ปุ่มเลือกของแต่ละเรื่อง + เรื่องที่ต้องย้ายตามกัน (เช่น ย้ายห้องเรียนออก ต้องย้ายรายชื่อนักเรียนรายห้องด้วย)
+    const paint = () => {
+      box.querySelectorAll('[data-cat]').forEach((seg) => seg.querySelectorAll('button').forEach((button) => {
+        const on = actions[seg.dataset.cat] === button.dataset.v;
+        button.classList.toggle('on', on);
+        button.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }));
+      const removing = p.categories.filter((item) => actions[item.key] === 'remove' && item.count);
+      const rows = removing.reduce((sum, item) => sum + item.count, 0);
+      box.querySelector('[data-plan-summary]').innerHTML = removing.length
+        ? `จะย้ายออก ${removing.length} เรื่อง รวม ${n(rows)} แถว: ${removing.map((item) => esc(item.label)).join(', ')}`
+        : 'ไม่ย้ายข้อมูลใดออก (สร้างไฟล์เก็บถาวรและเลื่อนชั้นอย่างเดียว)';
+    };
+    const setAction = (key, value) => {
+      actions[key] = value;
+      const item = p.categories.find((entry) => entry.key === key);
+      if (value === 'remove' && item) item.requires.forEach((other) => { if (actions[other]) actions[other] = 'remove'; });
+      // เก็บเรื่องลูกไว้ = ต้องเก็บเรื่องแม่ไว้ด้วย
+      if (value === 'keep') p.categories.forEach((entry) => { if (entry.requires.includes(key)) actions[entry.key] = 'keep'; });
+    };
+    box.querySelectorAll('[data-cat] button').forEach((button) => button.addEventListener('click', () => {
+      setAction(button.closest('[data-cat]').dataset.cat, button.dataset.v); paint();
+    }));
+    box.querySelectorAll('[data-preset]').forEach((button) => button.addEventListener('click', () => {
+      p.categories.forEach((item) => {
+        actions[item.key] = button.dataset.preset === 'recommended' ? item.def : button.dataset.preset === 'keep' ? 'keep' : 'remove';
+      });
+      paint();
+    }));
+    paint();
+    box.querySelector('[data-final]').addEventListener('change', (event) => loadPlan(p.year, event.target.value, actions));
+    box.querySelector('[data-export]').addEventListener('click', async (event) => {
+      event.currentTarget.disabled = true;
+      const result = await App.call('yearClose.export', { year: p.year });
+      event.currentTarget.disabled = false;
+      if (!result.ok) return;
+      box.querySelector('[data-export-result]').innerHTML = `<p class="close-done-inline"><i class="fa-solid fa-circle-check c-green"></i> ส่งออกข้อมูลปี ${esc(p.year)} แล้ว
+        <a class="secondary-button" href="${attr(result.data.url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-table"></i> เปิดไฟล์</a></p>`;
+    });
+    const confirmInput = box.querySelector('[data-confirm]');
+    if (!confirmInput) return;
+    const runButton = box.querySelector('[data-run]');
+    confirmInput.addEventListener('input', () => { runButton.disabled = confirmInput.value.trim() !== phrase; });
+    runButton.addEventListener('click', async () => {
+      const options = {};
+      box.querySelectorAll('[data-opt]').forEach((input) => { options[input.dataset.opt] = input.checked; });
+      runButton.disabled = true;
+      const result = await App.call('yearClose.run', Object.assign({ year: p.year, finalGrade: box.querySelector('[data-final]').value,
+        confirmText: confirmInput.value, actions }, options), { quiet: true });
+      if (!result.ok) {
+        runButton.disabled = false;
+        App.showErrors(box, result.error);
+        const lost = result.error.code === 'NETWORK_ERROR';
+        App.toast(lost ? 'ไม่ได้รับผลตอบกลับ ระบบอาจทำงานยังไม่เสร็จ รอ 1–2 นาทีแล้วเปิดหน้านี้ใหม่ ถ้าประวัติยังว่างให้กดปิดปีซ้ำได้ (ทำต่อจากเดิม ไม่สร้างข้อมูลซ้ำ)' : result.error.message, 'error');
+        return;
+      }
+      const s = result.data.summary;
+      const removed = Object.entries(s.removed || {}).map(([key, count]) => {
+        const item = p.categories.find((entry) => entry.key === key);
+        return `<li>${esc(item ? item.label : key)} ${n(count)} แถว</li>`;
+      }).join('');
+      box.innerHTML = `<div class="close-done"><i class="fa-solid fa-circle-check c-green"></i><div><h3>ปิดปีการศึกษา ${esc(result.data.year)} เรียบร้อย</h3>
+        ${removed ? `<p>ย้ายออกจากระบบหลัก (มีสำเนาในไฟล์เก็บถาวร):</p><ul>${removed}</ul>` : '<p>ไม่ได้ย้ายข้อมูลใดออก</p>'}
+        ${s.attendanceSummaries ? `<p>เก็บสรุปการมาเรียนรายคน ${n(s.attendanceSummaries)} รายการ</p>` : ''}
+        ${s.targetYear ? `<p>เลื่อนชั้นไปปี ${esc(s.targetYear)}: ${n(s.promoted)} คน · จบการศึกษา ${n(s.graduated)} คน · ห้องใหม่ ${n(s.newHomerooms)} ห้อง</p>` : ''}
+        <a class="primary-button" href="${attr(result.data.archiveUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-table"></i> เปิดไฟล์เก็บถาวร</a></div></div>`;
+      App.toast('ปิดปีการศึกษาเรียบร้อย', 'success');
+      await refreshState();
+      loadHistory();
+    });
+  }
+
+  async function refreshState() {
+    App.state.cache = {};
+    const state = await App.call('app.state', null, { silent: true });
+    if (state.ok) { App.applyApplicationState(state.data); App.renderNavigation(); }
+  }
+
+  async function loadHistory() {
+    const box = document.querySelector('#close-history [data-history]');
+    const response = await App.call('yearClose.history', null, { silent: true, quiet: true });
+    if (!box || !response.ok) return;
+    const items = response.data.items;
+    box.innerHTML = items.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>ปีการศึกษา</th><th>ปิดเมื่อ</th><th>สรุป</th><th></th></tr></thead><tbody>
+      ${items.map((item) => `<tr><td>${esc(item.year)}</td><td>${esc(App.fmtDateTime(item.closedAt))}</td>
+        <td><small>ย้ายออก ${Object.keys(item.summary.removed || {}).length || (item.summary.attendanceArchived ? 1 : 0)} เรื่อง · การมาเรียน ${Number(item.summary.attendanceArchived || 0).toLocaleString('th-TH')} แถว${item.summary.targetYear ? ' · เลื่อนชั้นไป ' + esc(item.summary.targetYear) : ''}</small></td>
+        <td><a class="ghost-button" href="${attr(item.archiveUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-table"></i> ไฟล์เก็บถาวร</a></td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted">ยังไม่เคยปิดปีการศึกษา</p>';
+  }
+
+  function bindTermCopy(panel) {
+    const out = panel.querySelector('[data-term-result]');
+    const values = () => ({ sourceTermId: panel.querySelector('[data-source]').value, targetTermId: panel.querySelector('[data-target]').value,
+      copyAdvisors: panel.querySelector('[data-term-advisors]').checked, setActive: panel.querySelector('[data-term-active]').checked });
+    panel.querySelector('[data-term-check]').addEventListener('click', async () => {
+      const response = await App.call('yearClose.copyTerm', Object.assign(values(), { dryRun: true }));
+      if (!response.ok) { out.innerHTML = ''; return; }
+      const d = response.data;
+      out.innerHTML = `<p>จะคัดลอก ${d.homerooms} ห้อง และนักเรียน ${d.students} คน
+        ${d.alreadyInTarget ? `<span class="badge warning">ภาคเรียนปลายทางมีนักเรียนแล้ว ${d.alreadyInTarget} คน (จะข้ามคนที่มีแล้ว)</span>` : ''}</p>
+        <button type="button" class="primary-button" data-term-run><i class="fa-solid fa-copy"></i> คัดลอกไปภาคเรียนใหม่</button>`;
+      out.querySelector('[data-term-run]').addEventListener('click', async () => {
+        const result = await App.call('yearClose.copyTerm', values());
+        if (!result.ok) return;
+        out.innerHTML = `<p><span class="badge success">คัดลอกแล้ว: ห้องใหม่ ${result.data.newHomerooms} ห้อง · นักเรียน ${result.data.moved} คน</span></p>`;
+        await refreshState();
+      });
+    });
+  }
+})();
+</script>

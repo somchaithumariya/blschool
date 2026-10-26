@@ -1,0 +1,824 @@
+<script>
+/**
+ * หน้าแรกของโรงเรียน (ก่อนเข้าสู่ระบบ), หน้าแก้ไขข้อมูลโรงเรียนและรูปภาพ, จัดการเมนู และเชื่อมต่อระบบภายนอก
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+  // ภาพที่ยังไม่ได้อัปโหลด (ตัวออกแบบหน้าแรก) ใช้ข้อมูลภาพในเครื่องแสดงตัวอย่างก่อน
+  const pendingImages = App.pendingImages = {};
+  const imageUrl = (id, width) => pendingImages[id] ? pendingImages[id].dataUrl
+    : `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w${width}`;
+  App.imageUrl = imageUrl;
+  const lines = (text) => String(text || '').split(/\r?\n/).map((line) => line.replace(/^\s*(\d+[.)]|[-•*])\s*/, '').trim()).filter(Boolean);
+  const THAI_MONTH = (value) => { const date = new Date(value + 'T00:00:00'); return isNaN(date) ? '' : date.toLocaleDateString('th-TH', { month: 'short' }); };
+  const DAY = (value) => { const date = new Date(value + 'T00:00:00'); return isNaN(date) ? '' : date.getDate(); };
+
+  // ================= หน้าแรก =================
+  function sectionOn(key) {
+    const sections = App.state.settings.landingSections || {};
+    return sections[key] !== false;
+  }
+
+  const num = (value) => Number(value || 0).toLocaleString('th-TH');
+  // ลำดับเริ่มต้นของส่วนต่าง ๆ (ผู้ดูแลระบบจัดลำดับใหม่ได้ในตัวออกแบบหน้าแรก)
+  const DEFAULT_ORDER = ['stats', 'today', 'basic', 'about', 'director', 'news', 'gallery', 'contact'];
+  // ลำดับที่บันทึกไว้ + ส่วนที่เพิ่มเข้ามาใหม่ (แทรกต่อจากส่วนที่อยู่ก่อนหน้าในลำดับเริ่มต้น ไม่ต่อท้ายสุด)
+  App.landingOrder = (saved) => {
+    const order = (saved || []).filter((key, index, list) => DEFAULT_ORDER.includes(key) && list.indexOf(key) === index);
+    DEFAULT_ORDER.forEach((key, index) => {
+      if (order.includes(key)) return;
+      const before = DEFAULT_ORDER.slice(0, index).reverse().find((item) => order.includes(item));
+      order.splice(before ? order.indexOf(before) + 1 : 0, 0, key);
+    });
+    return order;
+  };
+  // ชื่อเมนู/หัวข้อเริ่มต้นของแต่ละส่วน
+  const DEFAULT_TITLES = {
+    hero: { button: 'รู้จักโรงเรียน' },
+    ticker: { kicker: 'กิจกรรมเดือนนี้' },
+    today: { nav: 'สถิติวันนี้', kicker: 'วันนี้ที่โรงเรียน', title: 'การมาเรียนและการมาทำงาน' },
+    basic: { nav: 'ข้อมูลพื้นฐาน', kicker: 'ข้อมูลพื้นฐาน', title: 'ข้อมูลพื้นฐานโรงเรียน' },
+    about: { nav: 'วิสัยทัศน์ พันธกิจ', kicker: 'ทิศทางของโรงเรียน', title: 'วิสัยทัศน์ พันธกิจ และเป้าประสงค์' },
+    director: { nav: 'ผู้บริหาร', kicker: 'ผู้อำนวยการโรงเรียน' },
+    news: { nav: 'ข่าวสาร', kicker: 'ข่าวและกิจกรรม', title: 'ความเคลื่อนไหวล่าสุด' },
+    gallery: { nav: 'ภาพกิจกรรม', kicker: 'ภาพบรรยากาศ', title: 'รอบรั้วโรงเรียน' },
+    contact: { nav: 'ติดต่อเรา', kicker: 'ติดต่อ', title: 'ติดต่อโรงเรียน' }
+  };
+  App.LANDING_DEFAULT_TITLES = DEFAULT_TITLES;
+  App.LANDING_DEFAULT_ORDER = DEFAULT_ORDER;
+
+  function title(key, field) {
+    const custom = ((App.state.settings.landingTitles || {})[key] || {})[field];
+    return custom || (DEFAULT_TITLES[key] || {})[field] || '';
+  }
+
+  function sectionHeader(key) {
+    return `<header class="section-title"><span data-edit="title:${key}:kicker">${esc(title(key, 'kicker'))}</span>
+      <h2 data-edit="title:${key}:title">${esc(title(key, 'title'))}</h2></header>`;
+  }
+
+  // สี ฟอนต์ ขนาดตัวอักษร และภาพพื้นหลังของหน้าแรก จาก landingStyle
+  const loadedFonts = {};
+  function loadFont(name) {
+    if (!name || loadedFonts[name] || name === 'Sarabun') return;
+    loadedFonts[name] = true;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(name).replace(/%20/g, '+') + ':wght@400;500;600;700&display=swap';
+    document.head.appendChild(link);
+  }
+
+  function hexToRgb(hex) {
+    const value = parseInt(String(hex).slice(1), 16);
+    return [(value >> 16) & 255, (value >> 8) & 255, value & 255].join(',');
+  }
+
+  App.applyLandingStyle = function (style) {
+    style = style || {};
+    const root = document.getElementById('login-view');
+    const dialog = document.getElementById('login-dialog');
+    const vars = {
+      '--primary': style.accent, '--nav-bg': style.dark, '--page': style.pageBg, '--lp-card': style.cardBg, '--lp-text': style.text,
+      '--lp-heading': style.heading, '--lp-hero-text': style.heroText, '--lp-footer-bg': style.footerBg, '--lp-footer-text': style.footerText,
+      '--lp-ticker-bg': style.tickerBg, '--lp-ticker-text': style.tickerText,
+      '--lp-font': style.bodyFont ? `"${style.bodyFont}",Sarabun,sans-serif` : '',
+      '--lp-heading-font': style.headingFont ? `"${style.headingFont}",Sarabun,sans-serif` : '',
+      '--lp-scale': style.fontScale ? String(style.fontScale / 100) : '',
+      '--lp-hero-h': style.heroHeight ? style.heroHeight + 'vh' : ''
+    };
+    if (style.heroOverlay || style.heroOverlayOpacity !== undefined) {
+      const rgb = hexToRgb(style.heroOverlay || getComputedStyle(root).getPropertyValue('--nav-bg').trim() || '#0f1b33');
+      const alpha = (style.heroOverlayOpacity !== undefined ? style.heroOverlayOpacity : 85) / 100;
+      vars['--lp-overlay-bg'] = `linear-gradient(100deg,rgba(${rgb},${alpha}) 0%,rgba(${rgb},${(alpha * 0.7).toFixed(2)}) 45%,rgba(${rgb},${(alpha * 0.2).toFixed(2)}) 100%)`;
+    } else vars['--lp-overlay-bg'] = '';
+    [root, dialog].forEach((node) => {
+      if (!node) return;
+      Object.entries(vars).forEach(([name, value]) => { if (value) node.style.setProperty(name, value); else node.style.removeProperty(name); });
+    });
+    document.getElementById('site-hero').classList.toggle('hero-center', style.heroAlign === 'center');
+    loadFont(style.bodyFont);
+    loadFont(style.headingFont);
+  };
+
+  // ---------- สถิติวันนี้ ----------
+  const WEEKDAY_NAMES = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+  const thaiDate = (iso) => {
+    const date = new Date(iso + 'T00:00:00');
+    return isNaN(date) ? '' : `วัน${WEEKDAY_NAMES[date.getDay()]}ที่ ${date.getDate()} ${THAI_FULL_MONTHS[date.getMonth()]} ${date.getFullYear() + 543}`;
+  };
+  // "วันนี้" หรือ "วันที่ 2 ต.ค." เมื่อเป็นข้อมูลวันล่าสุดที่มีข้อมูล
+  const dayLabel = (day, todayIso) => (day === todayIso ? 'วันนี้' : `${DAY(day)} ${THAI_MONTH(day)}`);
+  const rateText = (rate) => (rate === null || rate === undefined ? '—' : `${rate}%`);
+  const rateTone = (rate) => (rate === null || rate === undefined ? '' : rate >= 95 ? 'good' : rate >= 85 ? 'fair' : 'low');
+
+  function todayCells(item, footer) {
+    const cell = footer ? 'th' : 'td';
+    if (!item || !item.checked) return `<${cell} class="num today-col muted">—</${cell}><${cell} class="num today-col muted">—</${cell}><${cell} class="num today-col muted">—</${cell}>`;
+    return `<${cell} class="num today-col">${num(item.present + item.late)}</${cell}><${cell} class="num today-col">${num(item.leave + item.absent)}</${cell}>
+      <${cell} class="num today-col"><span class="rate ${rateTone(item.rate)}">${rateText(item.rate)}</span></${cell}>`;
+  }
+
+  function todayHtml(today, students, staff) {
+    const stale = [students && students.day, staff && staff.day].filter(Boolean).some((day) => day !== today.date);
+    const time = today.generatedAt ? new Date(today.generatedAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) : '';
+    const counts = staff ? staff.counts : {};
+    const studentCard = students ? `<div class="basic-card today-card"><h3><i class="fa-solid fa-user-graduate"></i> นักเรียนมาเรียน${students.day !== today.date ? ' <small>(' + esc(thaiDate(students.day)) + ')</small>' : ''}</h3>
+        <div class="today-head"><strong class="today-big ${rateTone(students.total.rate)}">${rateText(students.total.rate)}</strong>
+          <div><span>มา ${num(students.total.present)} · สาย ${num(students.total.late)} · ลา ${num(students.total.leave)} · ขาด ${num(students.total.absent)}</span>
+          <small>เช็กชื่อแล้ว ${num(students.roomsChecked)}/${num(students.rooms)} ห้อง (${num(students.total.checked)} จาก ${num(students.total.enrolled)} คน)</small></div></div>
+        <div class="table-wrap"><table class="data-table compact today-table"><thead><tr><th>ชั้น</th><th class="num">มา</th><th class="num">สาย</th><th class="num">ลา</th><th class="num">ขาด</th><th>ร้อยละมาเรียน</th></tr></thead>
+        <tbody>${students.levels.map((item) => `<tr><td>${esc(item.level)}${item.rooms && item.roomsChecked < item.rooms ? ` <small class="muted">(${item.roomsChecked}/${item.rooms} ห้อง)</small>` : ''}</td>
+          ${item.checked ? `<td class="num">${num(item.present)}</td><td class="num">${num(item.late)}</td><td class="num">${num(item.leave)}</td><td class="num">${num(item.absent)}</td>
+          <td><span class="today-bar"><span class="${rateTone(item.rate)}" style="width:${Math.max(3, item.rate || 0)}%"></span></span> <b>${rateText(item.rate)}</b></td>`
+            : '<td colspan="5" class="muted">ยังไม่เช็กชื่อ</td>'}</tr>`).join('')}</tbody></table></div></div>` : '';
+    const staffCard = staff ? `<div class="basic-card today-card"><h3><i class="fa-solid fa-chalkboard-user"></i> ครูและบุคลากรมาทำงาน${staff.day !== today.date ? ' <small>(' + esc(thaiDate(staff.day)) + ')</small>' : ''}</h3>
+        <div class="today-head"><strong class="today-big">${num(staff.present)}<small>/${num(staff.total)}</small></strong><div><span>มาทำงาน</span><small>นับจากการลงเวลามาทำงาน</small></div></div>
+        <div class="today-status">${[['มาปกติ', 'good'], ['มาสาย', 'fair'], ['ไปราชการ', 'info'], ['ลา', 'muted'], ['ยังไม่ลงเวลา', 'muted']].map(([name, tone]) =>
+          `<div class="${tone}"><strong>${num(counts[name] || 0)}</strong><small>${name}</small></div>`).join('')}</div>
+        ${staff.official.length ? `<div class="today-official"><h4><i class="fa-solid fa-briefcase"></i> ไปราชการ</h4><ul>${staff.official.map((name) => `<li>${esc(name)}</li>`).join('')}</ul></div>` : ''}</div>` : '';
+    return `<section class="site-section" id="site-today">${sectionHeader('today')}
+      <p class="today-date">${esc(thaiDate(today.date))}${time ? ` · อัปเดตล่าสุด ${esc(time)} น.` : ''}${stale ? ' <span class="today-stale">วันนี้ยังไม่มีข้อมูลบางส่วน แสดงข้อมูลวันล่าสุดที่มี</span>' : ''}</p>
+      <div class="today-grid ${studentCard && staffCard ? '' : 'single'}">${studentCard}${staffCard}</div></section>`;
+  }
+
+  // โหลดสถิติวันนี้แยกจากหน้าแรก แล้วรีเฟรชทุก 10 นาทีขณะเปิดหน้าแรกค้างไว้
+  let todayTimer = null;
+  App.loadLandingToday = async function () {
+    const response = await App.request('public.today', null, false);
+    if (!response.ok) return;
+    App.state.landingToday = response.data;
+    const view = document.getElementById('login-view');
+    if (view && !view.classList.contains('hidden')) App.renderLanding();
+  };
+  function scheduleToday() {
+    if (todayTimer) return;
+    App.loadLandingToday();
+    todayTimer = setInterval(() => {
+      const view = document.getElementById('login-view');
+      if (document.visibilityState === 'visible' && view && !view.classList.contains('hidden')) App.loadLandingToday();
+    }, 10 * 60 * 1000);
+  }
+
+  App.renderLanding = function () {
+    scheduleToday();
+    const s = App.state.settings || {};
+    const landing = App.state.landing || { stats: {}, news: [], events: [] };
+    const hero = document.getElementById('site-hero');
+    if (!hero) return;
+    App.applyLandingStyle(s.landingStyle);
+    setText('hero-kicker', s.schoolAffiliation || '');
+    setText('hero-name-en', s.schoolNameEn || '');
+    setText('hero-motto', s.schoolMotto ? '“' + s.schoolMotto + '”' : '');
+    setText('site-brand-name', s.schoolName || 'ระบบบริหารจัดการโรงเรียน');
+    setText('site-brand-sub', s.schoolNameEn || s.schoolAffiliation || '');
+    const moreButton = document.querySelector('.hero-actions [data-scroll] span');
+    if (moreButton) moreButton.textContent = title('hero', 'button');
+    renderSlides(s);
+    renderTicker(s, landing, App.state.landingToday);
+
+    const blocks = {};
+    const stats = landing.stats || {};
+    if (sectionOn('stats') && (stats.students || stats.personnel || stats.homerooms)) {
+      blocks.stats = `<section class="site-stats">${[
+        ['fa-user-graduate', 'c-amber', stats.students, 'นักเรียน'],
+        ['fa-chalkboard-user', 'c-violet', stats.personnel, 'ครูและบุคลากร'],
+        ['fa-door-open', 'c-teal', stats.homerooms, 'ห้องเรียน'],
+        ['fa-calendar-days', 'c-sky', stats.academicYear || '-', 'ปีการศึกษา']
+      ].map(([icon, color, value, label]) => `<div class="site-stat"><span class="site-stat-icon"><i class="fa-solid ${icon} ${color}"></i></span>
+        <div><strong>${esc(typeof value === 'number' ? num(value) : value)}</strong><small>${label}</small></div></div>`).join('')}</section>`;
+    }
+
+    // สถิติวันนี้: นักเรียนมาเรียนรายชั้น + ครูมาทำงาน (โหลดแยกหลังหน้าแรกแสดงแล้ว)
+    const today = App.state.landingToday;
+    const studentsToday = today && today.students && today.students.day ? today.students : null;
+    const staffToday = today && today.staff && today.staff.day ? today.staff : null;
+    if (sectionOn('today') && (studentsToday || staffToday)) blocks.today = todayHtml(today, studentsToday, staffToday);
+    const todayByLevel = {};
+    if (studentsToday) studentsToday.levels.forEach((item) => { todayByLevel[item.level] = item; });
+
+    // ข้อมูลพื้นฐานโรงเรียน: ตารางข้อมูล + จำนวนนักเรียนแยกชั้น + บุคลากรแยกประเภท
+    // [ชื่อ, คีย์, แสดงเสมอ (ถ้าว่างแสดง —)]
+    const facts = [['ชื่อโรงเรียน', 'schoolName', 1], ['ชื่อภาษาอังกฤษ', 'schoolNameEn'], ['รหัสโรงเรียน', 'schoolCode', 1], ['สังกัด', 'schoolAffiliation', 1],
+      ['ระดับที่เปิดสอน', 'schoolLevels', 1], ['ก่อตั้งเมื่อ', 'schoolEstablished'], ['ผู้อำนวยการ', 'directorName', 1], ['สีประจำโรงเรียน', 'schoolColors'],
+      ['ต้นไม้ประจำโรงเรียน', 'schoolTree'], ['ที่ตั้ง', 'schoolAddress', 1], ['โทรศัพท์', 'schoolPhone', 1], ['อีเมล', 'schoolEmail']].filter((item) => item[2] || s[item[1]]);
+    const counts = [['ปีการศึกษาปัจจุบัน', stats.academicYear], ['จำนวนนักเรียน', stats.students ? num(stats.students) + ' คน' : ''],
+      ['ครูและบุคลากร', stats.personnel ? num(stats.personnel) + ' คน' : ''], ['จำนวนห้องเรียน', stats.homerooms ? num(stats.homerooms) + ' ห้อง' : '']].filter((item) => item[1]);
+    const levels = landing.studentsByLevel || [];
+    const personnelTypes = landing.personnelByType || [];
+    if (sectionOn('basic')) {
+      const sum = (key) => levels.reduce((total, item) => total + (item[key] || 0), 0);
+      const most = Math.max(1, ...personnelTypes.map((type) => type.count));
+      blocks.basic = `<section class="site-section" id="site-basic">${sectionHeader('basic')}
+        <div class="basic-grid ${levels.length || personnelTypes.length ? '' : 'single'}">
+          ${facts.length ? `<div class="basic-card"><h3><i class="fa-solid fa-school"></i> ข้อมูลทั่วไป</h3>
+            <table class="basic-table">${facts.map(([name, key]) => `<tr><th>${name}</th><td class="pre ${s[key] ? '' : 'muted'}" data-edit="${key}">${esc(s[key] || '—')}</td></tr>`).join('')}
+              ${counts.map(([name, value]) => `<tr><th>${name}</th><td>${esc(value)}</td></tr>`).join('')}</table></div>` : ''}
+          <div class="basic-side">
+            ${levels.length ? `<div class="basic-card"><h3><i class="fa-solid fa-user-graduate"></i> จำนวนนักเรียน ${stats.academicYear ? 'ปีการศึกษา ' + esc(stats.academicYear) : ''}</h3>
+              <div class="table-wrap"><table class="data-table compact"><thead><tr><th>ชั้น</th><th class="num">ห้อง</th><th class="num">ชาย</th><th class="num">หญิง</th><th class="num">รวม</th>${studentsToday ? `<th class="num today-col">มา${esc(dayLabel(studentsToday.day, today.date))}</th><th class="num today-col">ไม่มา</th><th class="num today-col">%</th>` : ''}</tr></thead>
+              <tbody>${levels.map((item) => `<tr><td>${esc(item.level)}</td><td class="num">${num(item.rooms)}</td><td class="num">${num(item.male)}</td><td class="num">${num(item.female)}</td><td class="num"><strong>${num(item.total)}</strong></td>${studentsToday ? todayCells(todayByLevel[item.level]) : ''}</tr>`).join('')}</tbody>
+              <tfoot><tr><th>รวม</th><th class="num">${num(sum('rooms'))}</th><th class="num">${num(sum('male'))}</th><th class="num">${num(sum('female'))}</th><th class="num">${num(sum('total'))}</th>${studentsToday ? todayCells(studentsToday.total, true) : ''}</tr></tfoot></table></div></div>` : ''}
+            ${personnelTypes.length ? `<div class="basic-card"><h3><i class="fa-solid fa-chalkboard-user"></i> ครูและบุคลากร</h3>
+              <div class="type-bars">${personnelTypes.map((item) => `<div class="type-bar"><span>${esc(item.name)}</span>
+                <span class="bar"><span style="width:${Math.max(6, Math.round(item.count * 100 / most))}%"></span></span><strong>${num(item.count)}</strong></div>`).join('')}</div>
+              ${staffToday ? `<p class="today-line"><i class="fa-solid fa-user-check"></i> มาทำงาน${esc(dayLabel(staffToday.day, today.date))} <b>${num(staffToday.present)}/${num(staffToday.total)}</b> · ไปราชการ ${num(staffToday.counts['ไปราชการ'])} · ลา ${num(staffToday.counts['ลา'])}</p>` : ''}</div>` : ''}
+          </div>
+        </div></section>`;
+    }
+
+    const mission = lines(s.schoolMission);
+    const goals = lines(s.schoolGoals);
+    const numbered = (items) => `<ol class="num-list">${items.map((item) => `<li>${esc(item)}</li>`).join('')}</ol>`;
+    if (sectionOn('about') && (s.schoolVision || mission.length || goals.length || s.schoolHistory || s.schoolPhilosophy || s.schoolIdentity)) {
+      blocks.about = `<section class="site-section" id="site-about">${sectionHeader('about')}
+        ${s.schoolVision ? `<article class="vision-card"><span class="vision-icon"><i class="fa-solid fa-eye"></i></span><div><h3>วิสัยทัศน์ (Vision)</h3>
+          <p class="pre" data-edit="schoolVision">${esc(s.schoolVision)}</p></div></article>` : ''}
+        ${mission.length || goals.length ? `<div class="mg-grid ${mission.length && goals.length ? '' : 'single'}">
+          ${mission.length ? `<article class="about-card" data-edit="schoolMission"><i class="fa-solid fa-bullseye"></i><h3>พันธกิจ (Mission)</h3>${numbered(mission)}</article>` : ''}
+          ${goals.length ? `<article class="about-card" data-edit="schoolGoals"><i class="fa-solid fa-flag-checkered"></i><h3>เป้าประสงค์ (Goals)</h3>${numbered(goals)}</article>` : ''}
+        </div>` : ''}
+        <div class="about-grid">
+          ${s.schoolPhilosophy ? `<article class="about-card" data-edit="schoolPhilosophy"><i class="fa-solid fa-lightbulb"></i><h3>ปรัชญา</h3><p class="pre">${esc(s.schoolPhilosophy)}</p></article>` : ''}
+          ${s.schoolIdentity ? `<article class="about-card" data-edit="schoolIdentity"><i class="fa-solid fa-star"></i><h3>อัตลักษณ์</h3><p class="pre">${esc(s.schoolIdentity)}</p></article>` : ''}
+        </div>
+        ${s.schoolHistory ? `<details class="history"><summary><i class="fa-solid fa-book-open"></i> ประวัติโรงเรียน</summary><p class="pre" data-edit="schoolHistory">${esc(s.schoolHistory)}</p></details>` : ''}
+      </section>`;
+    }
+
+    if (sectionOn('director') && s.directorName) {
+      blocks.director = `<section class="site-section" id="site-director"><div class="director-card">
+        <div class="director-photo" data-edit-image="director" ${s.directorPhotoFileId ? `style="background-image:url('${attr(imageUrl(s.directorPhotoFileId, 500))}')"` : ''}>${s.directorPhotoFileId ? '' : '<i class="fa-solid fa-user-tie"></i>'}</div>
+        <div><span class="section-kicker" data-edit="title:director:kicker">${esc(title('director', 'kicker'))}</span><h2 data-edit="directorName">${esc(s.directorName)}</h2>
+          ${s.directorMessage ? `<blockquote class="pre" data-edit="directorMessage">${esc(s.directorMessage)}</blockquote>` : ''}</div></div></section>`;
+    }
+
+    const news = sectionOn('news') ? landing.news || [] : [];
+    const events = sectionOn('events') ? landing.events || [] : [];
+    if (news.length || events.length) {
+      blocks.news = `<section class="site-section" id="site-news">${sectionHeader('news')}
+        <div class="news-layout ${events.length && news.length ? '' : 'single'}">
+          ${news.length ? `<div class="news-grid">${news.map((item) => `<article class="news-card">${item.isPinned ? '<span class="badge warning"><i class="fa-solid fa-thumbtack"></i> ปักหมุด</span>' : ''}
+            <small><i class="fa-regular fa-calendar"></i> ${esc(App.fmtDate(item.publishDate))}</small><h3>${esc(item.title)}</h3>
+            ${item.body ? `<p>${esc(item.body.length > 180 ? item.body.slice(0, 180) + '…' : item.body)}</p>` : ''}</article>`).join('')}</div>` : ''}
+          ${events.length ? `<aside class="events-card"><h3><i class="fa-solid fa-calendar-check"></i> กิจกรรมที่จะถึง</h3>${events.map((item) => `<div class="event-row">
+            <span class="event-date"><strong>${DAY(item.eventDate)}</strong><small>${esc(THAI_MONTH(item.eventDate))}</small></span>
+            <span><strong>${esc(item.name)}</strong><small>${esc(App.fmtDate(item.eventDate))}${item.endDate && item.endDate !== item.eventDate ? ' – ' + esc(App.fmtDate(item.endDate)) : ''}</small></span></div>`).join('')}</aside>` : ''}
+        </div></section>`;
+    }
+
+    const gallery = sectionOn('gallery') ? s.gallery || [] : [];
+    if (gallery.length) {
+      blocks.gallery = `<section class="site-section" id="site-gallery">${sectionHeader('gallery')}
+        <div class="gallery-grid">${gallery.map((item, index) => `<button type="button" class="gallery-item" data-gallery="${index}" data-edit-image="gallery">
+          <img ${index < 6 ? 'fetchpriority="high"' : 'loading="lazy"'} decoding="async" referrerpolicy="no-referrer" src="${attr(imageUrl(item.fileId, 480))}" alt="${attr(item.caption || 'ภาพบรรยากาศโรงเรียน')}" onload="this.classList.add('ready')" onerror="this.classList.add('ready')">
+          ${item.caption ? `<span>${esc(item.caption)}</span>` : ''}</button>`).join('')}</div></section>`;
+    }
+
+    const contacts = [['fa-location-dot', 'ที่อยู่', 'schoolAddress'], ['fa-phone', 'โทรศัพท์', 'schoolPhone'], ['fa-envelope', 'อีเมล', 'schoolEmail']].filter((item) => s[item[2]]);
+    const web = [['fa-globe', 'เว็บไซต์โรงเรียน', s.schoolWebsite], ['fa-facebook', 'Facebook', s.schoolFacebook], ['fa-map-location-dot', 'เปิดแผนที่', s.schoolMapUrl]]
+      .filter((item) => /^https:\/\//.test(item[2] || ''));
+    const emergency = sectionOn('emergency') ? s.emergencyContacts || [] : [];
+    // ระบบหลัก (เจ้าของระบบ): ปุ่มให้โรงเรียนอื่นขอใช้ระบบ
+    const boot = window.__BOOT__ || {};
+    const offer = !App.state.tenant && boot.registerUrl && sectionOn('contact')
+      ? `<div class="contact-card offer"><h3><i class="fa-solid fa-school-circle-check"></i> ต้องการใช้ระบบนี้ในโรงเรียนของท่าน</h3>
+          <p>กรอกข้อมูลและให้ผู้อำนวยการลงนามหนังสือขอใช้ระบบออนไลน์ ระบบติดตั้งให้อัตโนมัติ และส่งลิงก์ ชื่อผู้ใช้ รหัสผ่านทางอีเมล</p>
+          <a class="primary-button" href="${attr(boot.registerUrl)}" target="_top"><i class="fa-solid fa-file-signature"></i> ขอใช้ระบบสำหรับโรงเรียนของท่าน</a></div>` : '';
+    if ((sectionOn('contact') && (contacts.length || web.length)) || emergency.length || offer) {
+      blocks.contact = `<section class="site-section" id="site-contact">${sectionHeader('contact')}
+        <div class="contact-grid">
+          ${sectionOn('contact') && (contacts.length || web.length) ? `<div class="contact-card">${contacts.map(([icon, name, key]) => `<div class="contact-row"><i class="fa-solid ${icon}"></i>
+            <span><small>${name}</small><strong class="pre" data-edit="${key}">${esc(s[key])}</strong></span></div>`).join('')}
+            <div class="contact-links">${web.map(([icon, name, url]) => `<a class="secondary-button" href="${attr(url)}" target="_blank" rel="noopener noreferrer">
+              <i class="${icon === 'fa-facebook' ? 'fa-brands' : 'fa-solid'} ${icon}"></i> ${name}</a>`).join('')}</div></div>` : ''}
+          ${emergency.length ? `<div class="contact-card emergency"><h3><i class="fa-solid fa-phone-volume"></i> เบอร์โทรฉุกเฉิน</h3><div class="emergency-chips">
+            ${emergency.map((item) => `<a href="tel:${attr(String(item.phone).replace(/[^0-9+#]/g, ''))}"><strong>${esc(item.phone)}</strong><small>${esc(item.name)}</small></a>`).join('')}</div></div>` : ''}
+        ${offer}</div></section>`;
+    }
+
+    const order = App.landingOrder(s.landingOrder);
+    document.getElementById('site-sections').innerHTML = order.map((key) => blocks[key] || '').join('');
+    const links = [['home', 'หน้าแรก']].concat(order.filter((key) => blocks[key] && DEFAULT_TITLES[key] && DEFAULT_TITLES[key].nav).map((key) => [key, title(key, 'nav')]));
+    document.getElementById('site-links').innerHTML = links.map(([key, name]) => `<button type="button" data-scroll="${key}">${esc(name)}</button>`).join('');
+    const firstSection = order.find((key) => blocks[key] && key !== 'stats');
+    document.querySelectorAll('.hero-actions [data-scroll]').forEach((button) => {
+      button.dataset.scroll = firstSection || 'basic';
+      button.classList.toggle('hidden', !firstSection);
+    });
+    document.querySelectorAll('#site-sections [data-gallery]').forEach((button) => button.addEventListener('click', () => {
+      if (!document.getElementById('login-view').classList.contains('customizing')) openGallery(Number(button.dataset.gallery));
+    }));
+  };
+
+  // ---------- ตัววิ่งกิจกรรมประจำเดือน ----------
+  const THAI_FULL_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+  function renderTicker(s, landing, today) {
+    const bar = document.getElementById('site-ticker');
+    if (!bar) return;
+    // สรุปวันนี้ขึ้นตัววิ่งเฉพาะเมื่อเป็นข้อมูลของวันนี้จริง
+    const live = [];
+    if (today && sectionOn('today')) {
+      const st = today.students;
+      const sf = today.staff;
+      if (st && st.day === today.date && st.total.rate !== null) live.push({ icon: 'fa-user-graduate', text: `วันนี้นักเรียนมาเรียน ${st.total.rate}% (เช็กชื่อแล้ว ${st.roomsChecked}/${st.rooms} ห้อง)` });
+      if (sf && sf.day === today.date) live.push({ icon: 'fa-chalkboard-user', text: `ครูมาทำงาน ${sf.present}/${sf.total} · ไปราชการ ${sf.counts['ไปราชการ']} · ลา ${sf.counts['ลา']}` });
+    }
+    const items = live.concat(lines(s.tickerMessages).map((text) => ({ icon: 'fa-bullhorn', text })))
+      .concat((landing.monthEvents || []).map((item) => ({ icon: 'fa-calendar-day',
+        text: DAY(item.eventDate) + ' ' + THAI_MONTH(item.eventDate) + (item.endDate && item.endDate !== item.eventDate ? ' – ' + DAY(item.endDate) + ' ' + THAI_MONTH(item.endDate) : '') + ' · ' + item.name })));
+    if (!sectionOn('ticker') || !items.length) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+    const month = landing.month ? THAI_FULL_MONTHS[Number(landing.month.slice(5, 7)) - 1] + ' ' + (Number(landing.month.slice(0, 4)) + 543) : '';
+    const label = title('ticker', 'kicker') + (month ? ' ' + month : '');
+    const run = items.map((item) => `<span class="ticker-item"><i class="fa-solid ${item.icon}"></i> ${esc(item.text)}</span>`).join('');
+    const speed = (s.landingStyle && s.landingStyle.tickerSpeed) || 60;
+    const seconds = Math.max(12, Math.round(items.reduce((total, item) => total + item.text.length, 0) * 6 / speed * 4));
+    bar.classList.remove('hidden');
+    bar.innerHTML = `<span class="ticker-label" data-edit="title:ticker:kicker"><i class="fa-solid fa-calendar-days"></i> ${esc(label)}</span>
+      <div class="ticker-window"><div class="ticker-track" style="animation-duration:${seconds}s">${run}${run}</div></div>`;
+  }
+
+  // ---------- ภาพสไลด์พื้นหลัง ----------
+  const slider = { slides: [], index: 0, timer: null, paused: false };
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function renderSlides(s) {
+    const slides = (s.heroSlides || []).length ? s.heroSlides : (s.coverFileId ? [{ fileId: s.coverFileId, caption: '' }] : []);
+    const key = JSON.stringify(slides);
+    if (slider.key === key) return;
+    slider.key = key;
+    slider.slides = slides;
+    const hero = document.getElementById('site-hero');
+    hero.classList.toggle('has-image', slides.length > 0);
+    document.getElementById('hero-slides').innerHTML = slides.map((slide, index) => `<div class="hero-slide" data-slide="${index}" role="group"
+      aria-roledescription="slide" aria-label="${index + 1} จาก ${slides.length}${slide.caption ? ': ' + attr(slide.caption) : ''}"></div>`).join('');
+    document.getElementById('hero-controls').innerHTML = slides.length > 1 ? `<button type="button" class="hero-arrow" data-slide-step="-1" aria-label="ภาพก่อนหน้า"><i class="fa-solid fa-chevron-left"></i></button>
+      <div class="hero-dots">${slides.map((_, index) => `<button type="button" data-slide-go="${index}" aria-label="ภาพที่ ${index + 1}"></button>`).join('')}</div>
+      <button type="button" class="hero-arrow" data-slide-step="1" aria-label="ภาพถัดไป"><i class="fa-solid fa-chevron-right"></i></button>` : '';
+    showSlide(Math.min(slider.index, Math.max(0, slides.length - 1)));
+    clearInterval(slider.timer);
+    if (slides.length > 1 && !reduceMotion) slider.timer = setInterval(() => {
+      const view = document.getElementById('login-view');
+      if (!slider.paused && !document.hidden && view && !view.classList.contains('hidden')) showSlide(slider.index + 1);
+    }, 6000);
+  }
+  App.showSlide = (index) => showSlide(index);
+
+  function showSlide(index) {
+    const count = slider.slides.length;
+    const caption = document.getElementById('hero-caption');
+    if (!count) { caption.classList.add('hidden'); return; }
+    slider.index = (index + count) % count;
+    // โหลดภาพเฉพาะที่กำลังแสดงและภาพถัดไป เพื่อให้หน้าแรกเปิดเร็ว
+    [slider.index, (slider.index + 1) % count].forEach((position) => {
+      const node = document.querySelector(`#hero-slides [data-slide="${position}"]`);
+      if (node && !node.style.backgroundImage) node.style.backgroundImage = `url("${imageUrl(slider.slides[position].fileId, 1920)}")`;
+    });
+    document.querySelectorAll('#hero-slides [data-slide]').forEach((node) => node.classList.toggle('active', Number(node.dataset.slide) === slider.index));
+    document.querySelectorAll('#hero-controls [data-slide-go]').forEach((dot) => dot.classList.toggle('active', Number(dot.dataset.slideGo) === slider.index));
+    const text = slider.slides[slider.index].caption || '';
+    caption.textContent = text;
+    caption.classList.toggle('hidden', !text);
+  }
+
+  function setText(id, text) {
+    const node = document.getElementById(id);
+    if (node) { node.textContent = text; node.classList.toggle('hidden', !text); }
+  }
+
+  function openGallery(index) {
+    const gallery = App.state.settings.gallery || [];
+    const item = gallery[index];
+    if (!item) return;
+    const body = App.openModal(item.caption || 'ภาพบรรยากาศ', `<div class="lightbox"><img src="${attr(imageUrl(item.fileId, 1600))}" alt="${attr(item.caption || '')}">
+      <div class="form-actions"><button type="button" class="secondary-button" data-step="-1" ${index === 0 ? 'disabled' : ''}><i class="fa-solid fa-chevron-left"></i> ก่อนหน้า</button>
+      <span class="muted">${index + 1} / ${gallery.length}</span>
+      <button type="button" class="secondary-button" data-step="1" ${index === gallery.length - 1 ? 'disabled' : ''}>ถัดไป <i class="fa-solid fa-chevron-right"></i></button></div></div>`);
+    body.querySelectorAll('[data-step]').forEach((button) => button.addEventListener('click', () => openGallery(index + Number(button.dataset.step))));
+  }
+
+  // ---------- หน้าต่างเข้าสู่ระบบ ----------
+  function openLogin() {
+    if (document.getElementById('login-view').classList.contains('customizing')) return;
+    const dialog = document.getElementById('login-dialog');
+    if (!dialog.open) dialog.showModal();
+    setTimeout(() => { const input = document.getElementById('username'); if (input && !input.disabled) input.focus(); }, 50);
+  }
+  App.openLogin = openLogin;
+
+  // เมนูหน้าแรก, ปุ่มเข้าสู่ระบบ และปุ่มควบคุมสไลด์ (ไม่ใช้ลิงก์ # เพื่อไม่ชนกับเส้นทางของแอป)
+  document.addEventListener('click', (event) => {
+    const target = event.target.closest ? event.target : null;
+    if (!target) return;
+    if (target.closest('[data-open-login]')) { closeSiteMenu(); openLogin(); return; }
+    if (target.closest('[data-close-login]')) { document.getElementById('login-dialog').close(); return; }
+    const step = target.closest('[data-slide-step]');
+    if (step) { showSlide(slider.index + Number(step.dataset.slideStep)); return; }
+    const go = target.closest('[data-slide-go]');
+    if (go) { showSlide(Number(go.dataset.slideGo)); return; }
+    if (target.closest('#site-menu-toggle')) {
+      const links = document.getElementById('site-links');
+      links.classList.toggle('open');
+      document.getElementById('site-menu-toggle').setAttribute('aria-expanded', links.classList.contains('open'));
+      return;
+    }
+    const button = target.closest('[data-scroll]');
+    if (!button) return;
+    closeSiteMenu();
+    const section = button.dataset.scroll === 'home' ? document.getElementById('site-hero') : document.getElementById('site-' + button.dataset.scroll);
+    if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  function closeSiteMenu() {
+    const links = document.getElementById('site-links');
+    if (links) links.classList.remove('open');
+  }
+
+  App.refreshLanding = async function () {
+    const response = await App.request('public.landing', null, false);
+    if (response.ok) { App.state.landing = response.data; App.renderLanding(); }
+  };
+
+  // ดูตัวอย่างหน้าแรกโดยไม่ต้องออกจากระบบ
+  App.previewLanding = async function () {
+    await App.refreshLanding();
+    App.renderLanding();
+    const view = document.getElementById('login-view');
+    document.getElementById('app-shell').classList.add('hidden');
+    view.classList.remove('hidden');
+    view.classList.add('previewing');
+    document.querySelectorAll('#login-form input, #login-form button').forEach((node) => { node.disabled = true; });
+    document.getElementById('preview-exit').classList.remove('hidden');
+    window.scrollTo(0, 0);
+  };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const hero = document.getElementById('site-hero');
+    hero.addEventListener('mouseenter', () => { slider.paused = true; });
+    hero.addEventListener('mouseleave', () => { slider.paused = false; });
+    document.getElementById('preview-exit').addEventListener('click', () => {
+      const view = document.getElementById('login-view');
+      view.classList.add('hidden');
+      view.classList.remove('previewing');
+      document.querySelectorAll('#login-form input, #login-form button').forEach((node) => { node.disabled = false; });
+      const dialog = document.getElementById('login-dialog');
+      if (dialog.open) dialog.close();
+      document.getElementById('preview-exit').classList.add('hidden');
+      document.getElementById('app-shell').classList.remove('hidden');
+    });
+  });
+
+  // ================= หน้าแรกและข้อมูลโรงเรียน =================
+  const PROFILE_FIELDS = [
+    ['ข้อมูลพื้นฐาน', 'fa-school', 'c-blue', [
+      ['schoolName', 'ชื่อโรงเรียน *', 'text', 'เช่น โรงเรียนบ้านตัวอย่าง'], ['schoolNameEn', 'ชื่อภาษาอังกฤษ', 'text', 'เช่น Ban Tuayang School'],
+      ['schoolCode', 'รหัสโรงเรียน', 'text', 'รหัส 10 หลัก'], ['schoolAffiliation', 'สังกัด', 'text', 'เช่น สพป.ตัวอย่าง เขต 1'],
+      ['schoolLevels', 'ระดับที่เปิดสอน', 'text', 'เช่น อนุบาล 1 – มัธยมศึกษาปีที่ 3'], ['schoolEstablished', 'ก่อตั้งเมื่อ', 'text', 'เช่น 1 มิถุนายน 2480'],
+      ['schoolDescription', 'คำอธิบายสั้น (ใต้ชื่อโรงเรียน)', 'text', 'เช่น โรงเรียนขยายโอกาสทางการศึกษา', true],
+      ['schoolMotto', 'คำขวัญ', 'text', 'เช่น เรียนดี มีวินัย ใฝ่คุณธรรม', true],
+      ['schoolPhilosophy', 'ปรัชญา', 'text', 'เช่น การศึกษาคือรากฐานของชีวิต'], ['schoolIdentity', 'อัตลักษณ์', 'text', 'เช่น ยิ้ม ไหว้ ทักทาย'],
+      ['schoolColors', 'สีประจำโรงเรียน', 'text', 'เช่น ฟ้า – ขาว'], ['schoolTree', 'ต้นไม้ประจำโรงเรียน', 'text', 'เช่น ต้นราชพฤกษ์']]],
+    ['วิสัยทัศน์ พันธกิจ เป้าประสงค์ และประวัติ', 'fa-eye', 'c-violet', [
+      ['schoolVision', 'วิสัยทัศน์', 'textarea', 'ภายในปี 2570 โรงเรียน…', true],
+      ['schoolMission', 'พันธกิจ (บรรทัดละ 1 ข้อ)', 'textarea', '1. พัฒนาผู้เรียนให้มีคุณภาพ…\n2. พัฒนาครู…', true],
+      ['schoolGoals', 'เป้าประสงค์ (บรรทัดละ 1 ข้อ)', 'textarea', '1. ผู้เรียนมีผลสัมฤทธิ์ทางการเรียนสูงขึ้น…\n2. ครูจัดการเรียนรู้เน้นผู้เรียนเป็นสำคัญ…', true],
+      ['schoolHistory', 'ประวัติโรงเรียน', 'textarea', 'โรงเรียนก่อตั้งขึ้นเมื่อ…', true]]],
+    ['ผู้บริหาร', 'fa-user-tie', 'c-amber', [
+      ['directorName', 'ชื่อผู้อำนวยการ', 'text', 'เช่น นายสมชาย ใจดี'], ['academicHeadName', 'ชื่อหัวหน้าฝ่ายวิชาการ', 'text', ''],
+      ['directorMessage', 'สารจากผู้อำนวยการ', 'textarea', 'ข้อความต้อนรับสั้น ๆ', true]]],
+    ['ติดต่อ', 'fa-address-book', 'c-green', [
+      ['schoolAddress', 'ที่อยู่', 'textarea', 'เลขที่ หมู่ ตำบล อำเภอ จังหวัด รหัสไปรษณีย์', true],
+      ['schoolPhone', 'โทรศัพท์', 'text', ''], ['schoolEmail', 'อีเมล', 'text', ''],
+      ['schoolWebsite', 'เว็บไซต์ (https://…)', 'text', 'https://'], ['schoolFacebook', 'Facebook (https://…)', 'text', 'https://www.facebook.com/…'],
+      ['schoolMapUrl', 'ลิงก์ Google Maps (https://…)', 'text', 'https://maps.app.goo.gl/…'], ['footerText', 'ข้อความท้ายหน้า', 'text', '']]]
+  ];
+
+  App.register('#/school-profile', () => {
+    const s = App.state.settings;
+    const canEdit = App.can('settings.edit');
+    const field = ([name, label, type, placeholder, wide]) => `<label class="${wide || type === 'textarea' ? 'wide' : ''}">${label}
+      ${type === 'textarea' ? `<textarea name="${name}" rows="4" placeholder="${attr(placeholder)}">${esc(s[name] || '')}</textarea>`
+        : `<input name="${name}" value="${attr(s[name] || '')}" placeholder="${attr(placeholder)}">`}<small class="field-error" data-error-for="${name}"></small></label>`;
+    App.content(`<section class="panel profile-hero"><div class="panel-head"><div><h2><i class="fa-solid fa-school-flag c-blue"></i> หน้าแรกและข้อมูลโรงเรียน</h2>
+        <p>ข้อมูลในหน้านี้แสดงบนหน้าแรกก่อนเข้าสู่ระบบ และใช้ในเอกสาร ปพ. และรายงาน</p></div>
+        <div class="actions"><button type="button" class="secondary-button" data-preview><i class="fa-regular fa-eye"></i> ดูตัวอย่างหน้าแรก</button>
+          <a class="primary-button" href="#/landing-editor"><i class="fa-solid fa-wand-magic-sparkles"></i> ออกแบบหน้าแรก (เห็นผลทันที)</a></div></div></section>
+      <form id="profile-form" novalidate>
+        ${PROFILE_FIELDS.map(([title, icon, color, fields]) => `<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid ${icon} ${color}"></i> ${title}</h2></div></div>
+          <div class="form-grid">${fields.map(field).join('')}</div></section>`).join('')}
+        ${canEdit ? '<div class="sticky-actions"><button class="primary-button" type="submit"><i class="fa-solid fa-floppy-disk"></i> บันทึกข้อมูลโรงเรียน</button></div>' : ''}
+      </form>
+      ${canEdit ? imagesPanel() + sectionsPanel() : ''}`);
+    const form = document.getElementById('profile-form');
+    document.querySelector('[data-preview]').addEventListener('click', App.previewLanding);
+    if (!canEdit) { form.querySelectorAll('input,textarea').forEach((node) => { node.disabled = true; }); return; }
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      App.clearErrors(form);
+      const response = await App.call('settings.update', Object.assign({}, App.state.settings, Object.fromEntries(new FormData(form).entries())), { quiet: true });
+      if (!response.ok) { App.showErrors(form, response.error); App.toast(response.error.message, 'error'); return; }
+      App.applyBranding(response.data);
+      App.toast('บันทึกข้อมูลโรงเรียนแล้ว', 'success');
+    });
+    bindImages();
+    bindSections();
+  });
+
+  // [kind, คีย์ในตั้งค่า, ชื่อ, ไอคอน, คำแนะนำ, จำนวนสูงสุด, ขนาดย่อ]
+  const IMAGE_LISTS = [
+    ['slide', 'heroSlides', 'ภาพสไลด์หน้าแรก', 'fa-panorama c-sky', 'ภาพพื้นหลังด้านบนของหน้าแรก เลื่อนเปลี่ยนเองทุก 6 วินาที คำบรรยายจะแสดงบนภาพ (แนะนำภาพแนวนอน 1920×1080) ถ้าไม่ใส่จะใช้ “ภาพปกหน้าแรก”', 10, 1920],
+    ['gallery', 'gallery', 'ภาพบรรยากาศ', 'fa-camera-retro c-violet', 'แสดงในส่วน “ภาพกิจกรรม” ของหน้าแรก กดดูภาพใหญ่ได้', 24, 1600]
+  ];
+
+  const IMAGE_SLOTS = [
+    ['logo', 'logoFileId', 'ตราโรงเรียน', 'แสดงบนหน้าแรก แถบเมนู และเอกสาร (แนะนำพื้นโปร่งใส PNG)', 600],
+    ['cover', 'coverFileId', 'ภาพปกหน้าแรก', 'ภาพแนวนอน เช่น อาคารเรียนหรือหน้าโรงเรียน (แนะนำ 1920×1080)', 1920],
+    ['director', 'directorPhotoFileId', 'รูปผู้อำนวยการ', 'รูปหน้าตรง แนวตั้งหรือสี่เหลี่ยมจัตุรัส', 800]
+  ];
+
+  function imagesPanel() {
+    const s = App.state.settings;
+    return `<section class="panel" id="images-panel"><div class="panel-head"><div><h2><i class="fa-solid fa-images c-pink"></i> รูปภาพโรงเรียน</h2>
+        <p>ระบบย่อขนาดรูปให้อัตโนมัติก่อนอัปโหลด รูปเก็บในโฟลเดอร์ “โลโก้และตราโรงเรียน” และเปิดให้ผู้ที่มีลิงก์ดูได้ เพราะแสดงบนหน้าแรก</p></div></div>
+      <div class="image-slots">${IMAGE_SLOTS.map(([kind, key, name, hint]) => `<div class="image-slot">
+        <div class="image-preview ${kind}" ${s[key] ? `style="background-image:url('${attr(imageUrl(s[key], 600))}')"` : ''}>${s[key] ? '' : '<i class="fa-regular fa-image"></i>'}</div>
+        <strong>${name}</strong><small class="muted">${hint}</small>
+        <div class="actions"><label class="secondary-button file-button"><i class="fa-solid fa-upload"></i> ${s[key] ? 'เปลี่ยนรูป' : 'เลือกรูป'}
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-upload="${kind}" hidden></label>
+          ${s[key] ? `<button type="button" class="ghost-button danger" data-remove-kind="${kind}"><i class="fa-solid fa-trash"></i> ลบ</button>` : ''}</div></div>`).join('')}</div>
+      ${IMAGE_LISTS.map(([kind, key, title, icon, hint, max]) => imageList(kind, s[key] || [], title, icon, hint, max)).join('')}
+    </section>`;
+  }
+
+  // รายการภาพหลายภาพ (สไลด์หน้าแรก, ภาพบรรยากาศ) พร้อมคำบรรยาย
+  function imageList(kind, items, title, icon, hint, max) {
+    return `<div class="image-list" data-list="${kind}"><h3 class="subhead"><i class="fa-solid ${icon}"></i> ${title} (${items.length}/${max})</h3>
+      <p class="muted">${hint}</p>
+      <div class="gallery-admin">${items.map((item) => `<div class="gallery-admin-item" data-file="${attr(item.fileId)}">
+        <img loading="lazy" src="${attr(imageUrl(item.fileId, 400))}" alt="">
+        <input data-caption maxlength="120" value="${attr(item.caption || '')}" placeholder="คำบรรยายภาพ">
+        <button type="button" class="ghost-button danger" data-remove-item="${attr(item.fileId)}"><i class="fa-solid fa-trash"></i> ลบภาพ</button></div>`).join('')}
+        <label class="gallery-add ${items.length >= max ? 'hidden' : ''}"><i class="fa-solid fa-plus"></i><span>เพิ่มภาพ (เลือกได้หลายภาพ)</span>
+          <input type="file" accept="image/png,image/jpeg,image/webp" multiple data-upload="${kind}" hidden></label></div>
+      ${items.length ? `<div class="form-actions"><button type="button" class="secondary-button" data-save-captions><i class="fa-solid fa-floppy-disk"></i> บันทึกคำบรรยาย${title}</button></div>` : ''}</div>`;
+  }
+
+  // ย่อรูปในเบราว์เซอร์ก่อนส่ง เพื่อให้อัปโหลดและเปิดหน้าแรกได้เร็ว
+  async function shrinkImage(file, maxSide, keepPng) {
+    if (file.type === 'image/gif') return { mimeType: file.type, base64: await App.fileToBase64(file) };
+    const url = URL.createObjectURL(file);
+    try {
+      const image = await new Promise((resolve, reject) => { const node = new Image(); node.onload = () => resolve(node); node.onerror = reject; node.src = url; });
+      const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(image.naturalWidth * scale); canvas.height = Math.round(image.naturalHeight * scale);
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      const mimeType = keepPng && file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+      return { mimeType, base64: canvas.toDataURL(mimeType, 0.85).split(',')[1] };
+    } finally { URL.revokeObjectURL(url); }
+  }
+
+  function refreshImages() {
+    const panel = document.getElementById('images-panel');
+    if (!panel) return;
+    panel.outerHTML = imagesPanel();
+    bindImages();
+  }
+
+  function bindImages() {
+    const panel = document.getElementById('images-panel');
+    panel.querySelectorAll('[data-upload]').forEach((input) => input.addEventListener('change', async () => {
+      const kind = input.dataset.upload;
+      const files = [...input.files];
+      if (!files.length) return;
+      const slot = IMAGE_SLOTS.find((item) => item[0] === kind) || IMAGE_LISTS.map((item) => [item[0], item[1], item[2], item[4], item[6]]).find((item) => item[0] === kind);
+      let done = 0;
+      for (const file of files) {
+        if (files.length > 1) App.toast(`กำลังอัปโหลดภาพ ${done + 1}/${files.length}`, 'info');
+        const image = await shrinkImage(file, slot ? slot[4] : 1600, kind === 'logo');
+        const response = await App.call('settings.uploadImage', Object.assign({ kind }, image));
+        if (!response.ok) break;
+        App.applyBranding(response.data);
+        done += 1;
+      }
+      if (done) App.toast(`อัปโหลดแล้ว ${done} ภาพ`, 'success');
+      refreshImages();
+    }));
+    panel.querySelectorAll('[data-remove-kind]').forEach((button) => button.addEventListener('click', () => removeImage(button.dataset.removeKind, '')));
+    panel.querySelectorAll('[data-list]').forEach((list) => {
+      const kind = list.dataset.list;
+      const key = IMAGE_LISTS.find((item) => item[0] === kind)[1];
+      list.querySelectorAll('[data-remove-item]').forEach((button) => button.addEventListener('click', () => removeImage(kind, button.dataset.removeItem)));
+      const captions = list.querySelector('[data-save-captions]');
+      if (captions) captions.addEventListener('click', async () => {
+        const changes = {};
+        changes[key] = [...list.querySelectorAll('[data-file]')].map((node) => ({ fileId: node.dataset.file, caption: node.querySelector('[data-caption]').value }));
+        const response = await App.call('settings.update', Object.assign({}, App.state.settings, changes));
+        if (!response.ok) return;
+        App.applyBranding(response.data);
+        App.toast('บันทึกคำบรรยายภาพแล้ว', 'success');
+      });
+    });
+  }
+
+  async function removeImage(kind, fileId) {
+    if (!confirm('ลบรูปนี้ออกจากหน้าแรก? (ไฟล์จะย้ายไปถังขยะของ Google Drive และกู้คืนได้ภายใน 30 วัน)')) return;
+    const response = await App.call('settings.removeImage', { kind, fileId });
+    if (!response.ok) return;
+    App.applyBranding(response.data);
+    App.toast('ลบรูปแล้ว', 'success');
+    refreshImages();
+  }
+
+  function sectionsPanel() {
+    const sections = App.state.settings.landingSections || {};
+    return `<section class="panel" id="sections-panel"><div class="panel-head"><div><h2><i class="fa-solid fa-table-columns c-teal"></i> ส่วนที่แสดงบนหน้าแรก</h2>
+        <p>หน้าแรกไม่แสดงชื่อหรือข้อมูลรายบุคคลของนักเรียนและบุคลากร ส่วนที่ไม่มีข้อมูลจะซ่อนให้เอง</p></div></div>
+      <div class="switch-list">${(App.state.landingSections || []).map((section) => `<label class="switch-row"><span>${esc(section.name)}</span>
+        <input type="checkbox" class="switch" data-section="${attr(section.key)}" ${sections[section.key] !== false ? 'checked' : ''}></label>`).join('')}</div>
+      <div class="form-actions"><button type="button" class="primary-button" data-save-sections><i class="fa-solid fa-floppy-disk"></i> บันทึกการแสดงผล</button></div></section>`;
+  }
+
+  function bindSections() {
+    const panel = document.getElementById('sections-panel');
+    panel.querySelector('[data-save-sections]').addEventListener('click', async () => {
+      const landingSections = {};
+      panel.querySelectorAll('[data-section]').forEach((input) => { landingSections[input.dataset.section] = input.checked; });
+      const response = await App.call('settings.update', Object.assign({}, App.state.settings, { landingSections }));
+      if (!response.ok) return;
+      App.applyBranding(response.data);
+      App.toast('บันทึกการแสดงผลหน้าแรกแล้ว', 'success');
+    });
+  }
+
+  // ================= จัดการเมนู =================
+  App.register('#/menus', async () => {
+    const locked = App.state.lockedModules || [];
+    const modules = App.state.configurableModules.filter((module) => module.category !== 'top');
+    const draft = new Map(modules.map((module) => [module.key, module.isEnabled !== false]));
+    const integrations = await App.call('integrations.list', null, { silent: true, quiet: true });
+    const replacedBy = {};
+    if (integrations.ok) integrations.data.items.filter((item) => item.isEnabled && item.replacesModule).forEach((item) => { replacedBy[item.replacesModule] = item.name; });
+    const groups = App.state.groups.filter((group) => !['top', 'external'].includes(group.key));
+
+    function render() {
+      const enabled = [...draft.values()].filter(Boolean).length;
+      App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-toggle-on c-green"></i> จัดการเมนู</h2>
+          <p>เปิดเฉพาะเมนูที่โรงเรียนใช้จริง เมนูที่ปิดจะหายจากแถบเมนูของทุกคน <strong>ข้อมูลเดิมไม่หาย</strong> เปิดกลับมาเมื่อไรก็ใช้ต่อได้</p></div>
+          <div class="menu-summary"><strong>${enabled}</strong><small>จาก ${draft.size} เมนูที่เปิดอยู่</small></div></div>
+        <div class="preset-row"><span class="muted">ชุดสำเร็จรูป:</span>${(App.state.menuPresets || []).map((preset) => `<button type="button" class="secondary-button" data-preset="${attr(preset.key)}">
+          <i class="fa-solid ${attr(preset.icon)}"></i> ${esc(preset.name)}</button>`).join('')}</div></section>
+        <div class="menu-groups">${groups.map((group) => {
+          const items = modules.filter((module) => module.category === group.key);
+          if (!items.length) return '';
+          const on = items.filter((module) => draft.get(module.key)).length;
+          return `<section class="panel menu-group"><div class="menu-group-head"><span class="box"><i class="fa-solid ${attr(group.icon)}"></i></span>
+            <div><h3>${esc(group.name)}</h3><small class="muted">เปิด ${on}/${items.length}</small></div>
+            <input type="checkbox" class="switch" data-group-toggle="${attr(group.key)}" ${on === items.length ? 'checked' : ''} title="เปิด/ปิดทั้งหมวด"></div>
+            ${items.map((module) => {
+              const isLocked = locked.includes(module.key);
+              return `<label class="switch-row ${draft.get(module.key) ? '' : 'off'}"><span><i class="fa-solid ${attr(module.icon)} c-${attr(module.color || 'slate')}"></i> ${esc(module.name)}
+                ${isLocked ? '<span class="badge info"><i class="fa-solid fa-lock"></i> จำเป็น</span>' : ''}
+                ${replacedBy[module.key] ? `<span class="badge warning">แทนด้วย ${esc(replacedBy[module.key])}</span>` : ''}</span>
+                <input type="checkbox" class="switch" data-module="${attr(module.key)}" ${draft.get(module.key) ? 'checked' : ''} ${isLocked ? 'disabled' : ''}></label>`;
+            }).join('')}</section>`;
+        }).join('')}</div>
+        <div class="sticky-actions"><button type="button" class="secondary-button" data-reset>ยกเลิกการเปลี่ยนแปลง</button>
+          <button type="button" class="primary-button" data-save><i class="fa-solid fa-floppy-disk"></i> บันทึกเมนู</button></div>`);
+      const root = document.getElementById('page-content');
+      root.querySelectorAll('[data-module]').forEach((input) => input.addEventListener('change', () => { draft.set(input.dataset.module, input.checked); render(); }));
+      root.querySelectorAll('[data-group-toggle]').forEach((input) => input.addEventListener('change', () => {
+        modules.filter((module) => module.category === input.dataset.groupToggle && !locked.includes(module.key)).forEach((module) => draft.set(module.key, input.checked));
+        render();
+      }));
+      root.querySelectorAll('[data-preset]').forEach((button) => button.addEventListener('click', () => {
+        const preset = App.state.menuPresets.find((item) => item.key === button.dataset.preset);
+        modules.forEach((module) => draft.set(module.key, locked.includes(module.key) || preset.modules.includes(module.key)));
+        render();
+        App.toast('เลือกชุด “' + preset.name + '” แล้ว กด “บันทึกเมนู” เพื่อใช้งาน', 'info');
+      }));
+      root.querySelector('[data-reset]').addEventListener('click', () => { modules.forEach((module) => draft.set(module.key, module.isEnabled !== false)); render(); });
+      root.querySelector('[data-save]').addEventListener('click', async () => {
+        const response = await App.call('modules.update', modules.map((module) => ({ key: module.key, isEnabled: draft.get(module.key) === true })));
+        if (!response.ok) return;
+        await reloadState();
+        App.toast('บันทึกเมนูแล้ว', 'success');
+        App.route();
+      });
+    }
+    render();
+  });
+
+  async function reloadState() {
+    const refreshed = await App.call('app.state', null, { silent: true });
+    if (refreshed.ok) { App.applyApplicationState(refreshed.data); App.renderNavigation(); }
+  }
+
+  // ================= เชื่อมต่อระบบภายนอก =================
+  const ICONS = ['fa-link', 'fa-shield-heart', 'fa-triangle-exclamation', 'fa-house-user', 'fa-chart-simple', 'fa-diagram-project',
+    'fa-clipboard-list', 'fa-book', 'fa-globe', 'fa-school', 'fa-users', 'fa-calendar', 'fa-heart-pulse', 'fa-map-location-dot', 'fa-robot'];
+  const COLORS = { teal: 'เขียวน้ำทะเล', sky: 'ฟ้า', blue: 'น้ำเงิน', violet: 'ม่วง', green: 'เขียว', cyan: 'ฟ้าอมเขียว', amber: 'เหลืองอำพัน',
+    orange: 'ส้ม', rose: 'แดงกุหลาบ', pink: 'ชมพู', lime: 'เขียวมะนาว', slate: 'เทา' };
+
+  App.register('#/integrations', async () => {
+    const response = await App.call('integrations.list');
+    if (!response.ok) return App.renderError(response.error);
+    const items = response.data.items;
+    const canEdit = App.can('settings.edit');
+    const groupName = (key) => App.groupName(key) || key;
+    const moduleName = (key) => ((App.state.configurableModules.length ? App.state.configurableModules : App.state.modules).find((module) => module.key === key) || {}).name || key;
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-plug c-teal"></i> เชื่อมต่อระบบภายนอก</h2>
+        <p>เพิ่ม web app อื่นของโรงเรียนเป็นเมนูในระบบนี้ เลือกได้ว่าอยู่หมวดไหน ใครเห็น และจะใช้แทนเมนูเดิมหรือไม่</p></div>
+        ${canEdit ? '<div class="actions"><button type="button" class="primary-button" data-add><i class="fa-solid fa-plus"></i> เพิ่มระบบภายนอก</button></div>' : ''}</div>
+      <div class="integration-help">
+        <div><i class="fa-solid fa-arrow-up-right-from-square c-sky"></i><strong>เปิดแท็บใหม่</strong><small>ใช้ได้กับทุกเว็บ ผู้ใช้ล็อกอินที่ระบบนั้นตามปกติ</small></div>
+        <div><i class="fa-solid fa-window-maximize c-violet"></i><strong>ฝังในหน้า</strong><small>แสดงในกรอบของระบบนี้ ระบบปลายทางต้องอนุญาตให้ฝัง (Apps Script ใช้ XFrameOptionsMode.ALLOWALL)</small></div>
+        <div><i class="fa-solid fa-right-left c-amber"></i><strong>แทนที่เมนูเดิม</strong><small>ซ่อนเมนูเดิม เช่น “เยี่ยมบ้าน” เมื่อใช้ระบบเยี่ยมบ้านภายนอกแทน (ข้อมูลเดิมไม่หาย)</small></div>
+      </div></section>
+      <section class="panel">${items.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>ระบบ</th><th>หมวดเมนู</th><th>วิธีเปิด</th><th>ผู้ที่เห็น</th><th>แทนเมนู</th><th>สถานะ</th><th></th></tr></thead>
+        <tbody>${items.map((item) => `<tr><td><strong><i class="fa-solid ${attr(item.icon)} c-${attr(item.color)}"></i> ${esc(item.name)}</strong><br><small class="muted break">${esc(item.url)}</small></td>
+          <td>${esc(groupName(item.category))}</td><td>${item.openMode === 'embed' ? 'ฝังในหน้า' : 'แท็บใหม่'}</td>
+          <td>${item.visibleRoles.length ? item.visibleRoles.map((key) => esc(App.ROLE_NAMES[key] || key)).join(', ') : 'ทุกคน'}</td>
+          <td>${item.replacesModule ? esc(moduleName(item.replacesModule)) : '-'}</td>
+          <td>${item.isEnabled ? '<span class="badge success">เปิด</span>' : '<span class="badge">ปิด</span>'}</td>
+          <td class="row-actions"><a class="ghost-button" href="${attr(item.url)}" target="_blank" rel="noopener noreferrer" title="ทดลองเปิด"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>
+            ${canEdit ? `<button type="button" class="ghost-button" data-edit="${attr(item.id)}" title="แก้ไข"><i class="fa-solid fa-pen"></i></button>
+            <button type="button" class="ghost-button danger" data-delete="${attr(item.id)}" title="ลบ"><i class="fa-solid fa-trash"></i></button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+        : `<div class="empty-state"><div class="empty-icon"><i class="fa-solid fa-plug"></i></div><h2>ยังไม่มีระบบภายนอก</h2>
+          <p>ตัวอย่าง: ระบบรายงานจุดเสี่ยงและความปลอดภัย, ระบบ SWOT/SOAR, ระบบเยี่ยมบ้านนักเรียน</p></div>`}</section>`);
+    const root = document.getElementById('page-content');
+    const add = root.querySelector('[data-add]');
+    if (add) add.addEventListener('click', () => openIntegrationForm(null));
+    root.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => openIntegrationForm(items.find((item) => item.id === button.dataset.edit))));
+    root.querySelectorAll('[data-delete]').forEach((button) => button.addEventListener('click', async () => {
+      const item = items.find((entry) => entry.id === button.dataset.delete);
+      if (!confirm('ลบ “' + item.name + '” ออกจากเมนู?' + (item.replacesModule ? '\nเมนูเดิมที่ถูกแทนจะกลับมาแสดง' : ''))) return;
+      const result = await App.call('integrations.delete', { id: item.id });
+      if (!result.ok) return;
+      await reloadState();
+      App.toast('ลบแล้ว', 'success');
+      App.route();
+    }));
+  });
+
+  async function openIntegrationForm(item) {
+    const value = item || { name: '', url: 'https://', icon: 'fa-link', color: 'teal', category: 'external', openMode: 'newtab', visibleRoles: [],
+      replacesModule: '', sortOrder: 0, isEnabled: true, description: '' };
+    const rolesResponse = await App.call('roles.list', null, { silent: true, quiet: true });
+    const roles = rolesResponse.ok ? rolesResponse.data.roles.map((role) => ({ key: role.key, name: role.name }))
+      : Object.entries(App.ROLE_NAMES).map(([key, name]) => ({ key, name }));
+    const locked = App.state.lockedModules || [];
+    const replaceable = (App.state.configurableModules.length ? App.state.configurableModules : App.state.modules)
+      .filter((module) => module.category !== 'top' && !locked.includes(module.key));
+    const groups = App.state.groups.filter((group) => group.key !== 'top');
+    const body = App.openModal(item ? 'แก้ไขระบบภายนอก' : 'เพิ่มระบบภายนอก', `<form class="form-grid" novalidate>
+      <label>ชื่อเมนู *<input name="name" maxlength="80" value="${attr(value.name)}" placeholder="เช่น รายงานจุดเสี่ยงและความปลอดภัย"><small class="field-error" data-error-for="name"></small></label>
+      <label>ลิงก์ (https://…) *<input name="url" maxlength="500" value="${attr(value.url)}"><small class="field-error" data-error-for="url"></small></label>
+      <label class="wide">คำอธิบาย<input name="description" maxlength="300" value="${attr(value.description)}" placeholder="แสดงด้านบนเมื่อเปิดแบบฝังในหน้า"></label>
+      <label>อยู่ในหมวดเมนู<select name="category">${groups.map((group) => `<option value="${attr(group.key)}" ${group.key === value.category ? 'selected' : ''}>${esc(group.name)}</option>`).join('')}</select></label>
+      <label>วิธีเปิด<select name="openMode"><option value="newtab" ${value.openMode !== 'embed' ? 'selected' : ''}>เปิดแท็บใหม่ (ใช้ได้ทุกเว็บ)</option>
+        <option value="embed" ${value.openMode === 'embed' ? 'selected' : ''}>ฝังในหน้าของระบบนี้</option></select></label>
+      <div class="wide"><span class="field-label">ไอคอน</span><div class="icon-picker">${ICONS.map((icon) => `<label class="icon-choice"><input type="radio" name="icon" value="${icon}" ${icon === value.icon ? 'checked' : ''}>
+        <span><i class="fa-solid ${icon}"></i></span></label>`).join('')}</div></div>
+      <label>สีไอคอน<select name="color">${Object.entries(COLORS).map(([color, name]) => `<option value="${color}" ${color === value.color ? 'selected' : ''}>${name}</option>`).join('')}</select></label>
+      <label>ลำดับการแสดง<input name="sortOrder" type="number" min="0" value="${attr(value.sortOrder)}"></label>
+      <div class="wide"><span class="field-label">ผู้ที่เห็นเมนูนี้ (ไม่เลือก = ทุกคน)</span><div class="check-list">${roles.map((role) => `<label class="check-row">
+        <input type="checkbox" name="visibleRoles" value="${attr(role.key)}" ${value.visibleRoles.includes(role.key) ? 'checked' : ''}> ${esc(role.name)}</label>`).join('')}</div></div>
+      <label class="wide">ใช้แทนเมนูเดิม (ซ่อนเมนูนั้น)<select name="replacesModule"><option value="">— ไม่แทนเมนูใด —</option>
+        ${replaceable.map((module) => `<option value="${attr(module.key)}" ${module.key === value.replacesModule ? 'selected' : ''}>${esc(module.name)}</option>`).join('')}</select></label>
+      <label class="check-row wide"><input type="checkbox" name="isEnabled" ${value.isEnabled ? 'checked' : ''}> เปิดใช้งานเมนูนี้</label>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="submit" class="primary-button"><i class="fa-solid fa-floppy-disk"></i> บันทึก</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      App.clearErrors(form);
+      const data = new FormData(form);
+      const values = Object.fromEntries(data.entries());
+      values.visibleRoles = data.getAll('visibleRoles');
+      values.isEnabled = form.elements.isEnabled.checked;
+      const result = await App.call('integrations.save', { id: item ? item.id : '', version: item ? item.version : '', values }, { quiet: true });
+      if (!result.ok) { App.showErrors(form, result.error); App.toast(result.error.message, 'error'); return; }
+      App.closeModal();
+      await reloadState();
+      App.toast('บันทึกแล้ว เมนูอยู่ในหมวด “' + App.groupName(result.data.category) + '”', 'success');
+      App.route();
+    });
+  }
+
+  // หน้าของระบบภายนอก (เส้นทาง #/ext-…)
+  App.renderExternal = function (module) {
+    const embed = module.openMode === 'embed';
+    App.content(`<section class="panel ext-panel"><div class="panel-head"><div><h2><i class="fa-solid ${attr(module.icon)} c-${attr(module.color)}"></i> ${esc(module.name)}</h2>
+        <p>${esc(module.description || 'ระบบภายนอกที่เชื่อมต่อกับระบบโรงเรียน')}</p></div>
+        <div class="actions"><a class="secondary-button" href="${attr(module.url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square"></i> เปิดในแท็บใหม่</a></div></div>
+      ${embed ? `<iframe class="ext-frame" src="${attr(module.url)}" title="${attr(module.name)}" referrerpolicy="no-referrer" allow="geolocation; camera; clipboard-write"></iframe>
+        <p class="muted">หากกรอบด้านบนว่าง แสดงว่าระบบปลายทางไม่อนุญาตให้ฝัง กรุณากด “เปิดในแท็บใหม่”</p>`
+        : `<div class="empty-state"><div class="empty-icon"><i class="fa-solid fa-arrow-up-right-from-square"></i></div><h2>ระบบนี้เปิดในแท็บใหม่</h2>
+          <a class="primary-button" href="${attr(module.url)}" target="_blank" rel="noopener noreferrer">เปิด ${esc(module.name)}</a></div>`}</section>`);
+  };
+})();
+</script>

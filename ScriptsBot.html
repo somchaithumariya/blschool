@@ -1,0 +1,266 @@
+<script>
+/**
+ * น้องบอท: แชทบอทประจำหน้า (ปุ่มบนแถบด้านบน + หน้าต่างแชทมุมขวาล่าง)
+ * - มีบอทหลายตัวแยกตามงาน (APP_CONFIG.BOTS) ชื่อ สี และไอคอนต่างกัน ผู้ใช้เลือกได้ ทุกตัวใช้ API key ของเรื่อง "น้องบอท" ร่วมกัน
+ * - เปิดหน้าในหมวดงานใด บอทที่ถนัดหมวดนั้นจะถูกเลือกให้ก่อน
+ * - ถามได้เฉพาะข้อมูลของหน้าที่เปิดอยู่ เซิร์ฟเวอร์ดึงข้อมูลเองตามสิทธิ์ของผู้ถาม หน้าเว็บส่งไปแค่ "หน้าไหน ปีไหน กรองอะไร ค้นอะไร บอทตัวไหน"
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const esc = App.esc;
+  const attr = App.attr;
+  const button = document.getElementById('bot-button');
+  const panel = document.getElementById('bot-panel');
+  if (!button || !panel || !document.getElementById('bot-dock')) return;
+
+  const SUMMARY_PAGES = ['dashboard', 'safety-dashboard', 'swot', 'swot-result', 'tows', 'school-direction'];
+  const FALLBACK_BOT = { key: 'general', name: 'น้องบอท', role: 'ผู้ช่วยทั่วไป', icon: 'fa-comment-dots', color: '#1e3a5f', categories: [] };
+  const GENERAL = ['สรุปข้อมูลหน้านี้ให้หน่อย', 'มีรายการใดที่ควรติดตามเป็นพิเศษ'];
+  // หน้าที่บอทยังไม่เห็นข้อมูล: ถามวิธีใช้งานได้
+  const HOW_TO = ['หน้านี้ใช้ทำอะไร', 'เริ่มใช้งานหน้านี้อย่างไร'];
+  const SUGGESTIONS = {
+    'home-visits': ['นักเรียนคนไหนมีปัญหาที่ควรติดตาม', 'สรุปฐานะทางเศรษฐกิจของครอบครัว', 'บ้านไหนที่ความสัมพันธ์ในครอบครัวน่าเป็นห่วง'],
+    'screenings': ['สรุปนักเรียนกลุ่มเสี่ยงและมีปัญหา', 'ด้านไหนมีนักเรียนเสี่ยงมากที่สุด'],
+    'sdq': ['นักเรียนคนไหนผล SDQ ควรได้รับการดูแล', 'สรุปผล SDQ ทั้งหมด'],
+    'counseling': ['เรื่องที่นักเรียนมาปรึกษาบ่อยที่สุด', 'มีรายใดที่ยังต้องติดตาม'],
+    'referrals': ['สรุปการส่งต่อนักเรียน', 'มีรายใดที่ยังไม่เสร็จสิ้น'],
+    'student-support': ['นักเรียนกลุ่มใดต้องช่วยเหลือเร่งด่วน', 'สรุปปัญหาที่พบบ่อย'],
+    'safety-incidents': ['เหตุประเภทไหนเกิดบ่อยที่สุด', 'มีเหตุใดที่ยังแก้ไขไม่เสร็จ'],
+    'safety-risks': ['จุดเสี่ยงใดยังไม่ได้แก้ไข', 'จุดเสี่ยงระดับสูงมีอะไรบ้าง'],
+    'safety-dashboard': ['สรุปสถานการณ์ความปลอดภัยตอนนี้', 'ควรทำอะไรก่อนเป็นอันดับแรก'],
+    'lesson-plans': ['ครูแต่ละคนส่งแผนแล้วกี่แผน', 'สรุปบันทึกหลังสอนที่น่าสนใจ'],
+    'leave-requests': ['มีใบลาใดรออนุมัติ', 'ใครลามากที่สุดและลาประเภทใด'],
+    'supervision': ['สรุปผลนิเทศและจุดที่ควรพัฒนา', 'ครูคนใดยังไม่ได้รับการนิเทศ'],
+    'dashboard': ['สรุปภาพรวมวันนี้', 'มีอะไรที่ควรรู้ก่อนเริ่มงาน'],
+    'swot-result': ['อธิบายตำแหน่งของโรงเรียนในกราฟไข่แดง', 'ความต้องการจำเป็นเร่งด่วน 5 อันดับแรก', 'ควรเน้นกลยุทธ์แบบใด เพราะอะไร'],
+    'tows': ['ช่วยเสนอกลยุทธ์ SO เพิ่ม', 'กลยุทธ์ TOWS ข้อใดยังไม่ได้ใช้'],
+    'school-direction': ['แผนยังขาดความเชื่อมโยงตรงไหน', 'ช่วยเขียนตัวชี้วัดแบบ SMART ให้เป้าประสงค์', 'วิสัยทัศน์นี้ดีพอหรือยัง'],
+    'projects': ['โครงการใดตอบความต้องการจำเป็นระดับสูง', 'ประเด็นมาตรฐานใดยังไม่มีโครงการ'],
+    'project-reports': ['สรุปผลการดำเนินโครงการ', 'โครงการใดไม่บรรลุเป้าหมายและควรปรับอย่างไร']
+  };
+
+  // ---------- ตัวการ์ตูนประจำบอท (วาดเป็น SVG ในหน้า ไม่โหลดรูปจากภายนอก) ----------
+  // นักเรียน = เสื้อขาวคอปก · ครู = เสื้อสีตามงาน · แต่ละตัวถือของที่บอกงานของตน
+  const CHARACTERS = {
+    general: { skin: '#ffd9b8', hair: '#2a2a38', style: 'boy', shirt: '#ffffff', trim: '#1e3a5f', prop: 'wave' },
+    care: { skin: '#ffd2b0', hair: '#5b3a29', style: 'bun', shirt: '#14b8a6', trim: '#0f766e', prop: 'heart' },
+    safety: { skin: '#f6cba5', hair: '#26221f', style: 'boy', shirt: '#ffffff', trim: '#b91c1c', prop: 'shield', hat: 'helmet' },
+    academic: { skin: '#ffdcc0', hair: '#3b2a20', style: 'long', shirt: '#7c3aed', trim: '#5b21b6', prop: 'book', glasses: true },
+    personnel: { skin: '#f2c49b', hair: '#1f1f1f', style: 'short', shirt: '#b45309', trim: '#78350f', prop: 'clipboard', tie: true },
+    strategy: { skin: '#ffd6b5', hair: '#2d1e14', style: 'pony', shirt: '#ffffff', trim: '#7c2d12', prop: 'compass' }
+  };
+  const HAIR_BACK = {
+    long: (c) => `<path d="M30 52 C28 30 44 20 60 20 C76 20 92 30 90 52 L92 84 C84 88 78 84 76 80 L44 80 C42 84 36 88 28 84 Z" fill="${c}"/>`,
+    pony: (c) => `<path d="M84 34 C100 36 104 58 94 72 C92 62 88 52 82 46 Z" fill="${c}"/>`,
+    bun: (c) => `<circle cx="60" cy="19" r="10" fill="${c}"/>`
+  };
+  const HAIR_FRONT = {
+    boy: (c) => `<path d="M31 52 C29 30 44 21 60 21 C77 21 91 30 89 52 C86 43 80 37 70 36 C66 41 56 42 48 38 C40 41 34 46 31 52 Z" fill="${c}"/>`,
+    short: (c) => `<path d="M31 50 C30 30 45 21 60 21 C77 21 91 31 89 50 C85 40 74 34 62 35 L58 42 L54 35 C44 36 35 42 31 50 Z" fill="${c}"/>`,
+    long: (c) => `<path d="M31 52 C30 31 45 21 60 21 C76 21 90 31 89 52 C82 40 70 36 60 37 C50 36 38 40 31 52 Z" fill="${c}"/>`,
+    pony: (c) => `<path d="M31 52 C30 31 45 21 60 21 C76 21 90 31 89 52 C84 42 74 37 64 38 C56 34 42 38 31 52 Z" fill="${c}"/>`,
+    bun: (c) => `<path d="M31 52 C30 31 45 23 60 23 C76 23 90 31 89 52 C82 41 72 37 60 38 C48 37 38 41 31 52 Z" fill="${c}"/>`
+  };
+  const PROPS = {
+    wave: () => '<g><path d="M82 100 Q94 94 97 80" fill="none" stroke="#cbd5e1" stroke-width="12" stroke-linecap="round"/><path d="M82 100 Q94 94 97 80" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round"/>' +
+      '<circle cx="98" cy="74" r="7" fill="var(--skin)"/><path d="M93 69 L92 64 M97 67 L97 61 M101 68 L103 63" stroke="var(--skin)" stroke-width="3" stroke-linecap="round"/>' +
+      '<path d="M106 62 Q110 66 108 72 M110 58 Q116 65 113 74" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-linecap="round"/></g>',
+    heart: () => '<path d="M88 104 C74 95 76 84 83 84 C86 84 88 87 88 89 C88 87 90 84 93 84 C100 84 102 95 88 104 Z" fill="#f43f5e" stroke="#fff" stroke-width="1.5"/>',
+    shield: () => '<g><path d="M88 82 L101 87 C101 99 96 106 88 110 C80 106 75 99 75 87 Z" fill="#dc2626" stroke="#fff" stroke-width="1.5"/><path d="M82 95 L87 100 L95 90" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></g>',
+    book: () => '<g><rect x="74" y="88" width="28" height="20" rx="2" fill="#fbbf24" stroke="#fff" stroke-width="1.5"/><path d="M88 88 V108" stroke="#b45309" stroke-width="1.5"/></g>',
+    clipboard: () => '<g><rect x="76" y="84" width="22" height="26" rx="3" fill="#fef3c7" stroke="#78350f" stroke-width="2"/><rect x="82" y="81" width="10" height="6" rx="2" fill="#78350f"/><path d="M80 94 H94 M80 99 H94 M80 104 H89" stroke="#b45309" stroke-width="1.8" stroke-linecap="round"/></g>',
+    compass: () => '<g><circle cx="88" cy="97" r="12" fill="#fff" stroke="#7c2d12" stroke-width="2.5"/><path d="M88 88 L91 97 L88 106 L85 97 Z" fill="#ea580c"/><circle cx="88" cy="97" r="1.6" fill="#7c2d12"/></g>'
+  };
+  // ภาพตัวการ์ตูน (ขนาดตามกล่องที่ใส่) · key ที่ไม่รู้จักใช้ตัวทั่วไป
+  App.botFace = (key) => {
+    const c = CHARACTERS[key] || CHARACTERS.general;
+    const student = c.shirt === '#ffffff';
+    return `<svg viewBox="0 0 120 120" class="bot-face-svg" aria-hidden="true" style="--skin:${c.skin}">
+      ${HAIR_BACK[c.style] ? HAIR_BACK[c.style](c.hair) : ''}
+      <path d="M26 120 C26 98 40 86 60 86 C80 86 94 98 94 120 Z" fill="${c.shirt}" stroke="${student ? '#cbd5e1' : c.trim}" stroke-width="1.5"/>
+      ${student ? `<path d="M50 87 L60 99 L70 87" fill="none" stroke="${c.trim}" stroke-width="3" stroke-linejoin="round"/><path d="M57 98 L60 112 L63 98 Z" fill="${c.trim}"/>`
+        : `<path d="M50 87 L60 97 L70 87" fill="#fff" opacity=".9"/>${c.tie ? `<path d="M57 96 L60 114 L63 96 Z" fill="${c.trim}"/>` : ''}`}
+      <rect x="54" y="74" width="12" height="14" rx="5" fill="${c.skin}"/>
+      <circle cx="60" cy="52" r="28" fill="${c.skin}"/>
+      ${HAIR_FRONT[c.style](c.hair)}
+      ${c.hat === 'helmet' ? '<path d="M30 46 C30 24 46 16 60 16 C74 16 90 24 90 46 Z" fill="#facc15"/><rect x="26" y="43" width="68" height="6" rx="3" fill="#eab308"/><rect x="57" y="18" width="6" height="25" rx="3" fill="#fde047"/>' : ''}
+      <ellipse cx="49" cy="55" rx="3.4" ry="4.2" fill="#2a2a38"/><ellipse cx="71" cy="55" rx="3.4" ry="4.2" fill="#2a2a38"/>
+      <circle cx="50.2" cy="53.4" r="1.2" fill="#fff"/><circle cx="72.2" cy="53.4" r="1.2" fill="#fff"/>
+      ${c.glasses ? '<g fill="none" stroke="#3f3f46" stroke-width="2"><circle cx="49" cy="55" r="8"/><circle cx="71" cy="55" r="8"/><path d="M57 55 H63"/></g>' : ''}
+      <ellipse cx="42" cy="63" rx="4.2" ry="2.6" fill="#fb7185" opacity=".45"/><ellipse cx="78" cy="63" rx="4.2" ry="2.6" fill="#fb7185" opacity=".45"/>
+      <path d="M53 65 Q60 71 67 65" fill="none" stroke="#7a3b2e" stroke-width="2.4" stroke-linecap="round"/>
+      ${PROPS[c.prop]()}</svg>`;
+  };
+
+  const chats = {};
+  const picks = {};
+  const dock = document.getElementById('bot-dock');
+  const hello = document.getElementById('bot-hello');
+  const greeted = {};
+  let helloTimer = null;
+  let owner = '';
+  let open = false;
+  let waiting = '';
+
+  function bots() { return (App.state.bots && App.state.bots.length) ? App.state.bots : [FALLBACK_BOT]; }
+  function currentModule() {
+    const hash = location.hash || '#/dashboard';
+    return (App.state.modules || []).find((item) => item.route === hash) || null;
+  }
+  function supported(module) { return !!module && (!!App.state.entities[module.key] || SUMMARY_PAGES.includes(module.key)); }
+  // บอทประจำหน้า: ตัวที่ถนัดหมวดงานของหน้านั้น ไม่มีก็ใช้ตัวทั่วไป (ไม่ให้สลับ เพื่อให้แต่ละหน้ามีผู้รับผิดชอบชัดเจน)
+  function botFor(module) {
+    const list = bots();
+    return list.find((bot) => module && (bot.categories || []).includes(module.category)) || list[0];
+  }
+  // บอทใช้ได้เมื่อมี key ของน้องบอท หรือ key ของเรื่อง AI ประจำบอทนั้น (เช่น น้องกลยุทธ์ใช้ key ของ AI SWOT)
+  function usableBot(bot, status) {
+    return !!status && (!!status.bot || (!!bot.feature && bot.feature !== 'bot' && !!status[bot.feature]));
+  }
+  // แชทแยกตามหน้า + บอท และแยกตามนักเรียนเมื่อเปิดแฟ้มรายคนอยู่ (ไม่ให้คำตอบของนักเรียนคนก่อนปนกับคนใหม่)
+  function chatId(route, bot) {
+    const module = App.state.modules.find((item) => item.route === route);
+    const view = module ? App.cached('ui:' + module.key) || {} : {};
+    return route + '|' + bot.key + (view.studentId ? '|' + view.studentId : '');
+  }
+  function chatOf(id) { return chats[id] || (chats[id] = []); }
+
+  // ตัวหนาแบบ **ข้อความ** ที่ AI มักใช้ (ส่วนอื่นแสดงตามตัวอักษร)
+  function rich(text) { return esc(text).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>'); }
+  function safeColor(value) { return /^#[0-9a-f]{6}$/i.test(String(value)) ? value : '#1e3a5f'; }
+  function safeIcon(value) { return /^fa-[a-z0-9-]+$/.test(String(value)) ? value : 'fa-comment-dots'; }
+
+  function paint() {
+    const module = currentModule();
+    const route = module ? module.route : '';
+    const ok = supported(module);
+    const bot = botFor(module);
+    const id = chatId(route, bot);
+    const history = chatOf(id);
+    const name = module ? module.name : 'หน้านี้';
+    const chips = !module || history.length ? [] : ok ? (SUGGESTIONS[module.key] || []).concat(GENERAL).slice(0, 4) : HOW_TO;
+    panel.style.setProperty('--bot', safeColor(bot.color));
+    panel.innerHTML = `<header class="bot-head">
+        <span class="bot-mark" aria-hidden="true">${App.botFace(bot.key)}</span>
+        <div class="bot-title"><strong>${esc(bot.name)}</strong><small title="${attr(name)}">กำลังดูหน้า ${esc(name)}</small></div>
+        <button type="button" class="icon-button" data-bot-clear title="เริ่มคุยใหม่" aria-label="เริ่มคุยใหม่" ${history.length ? '' : 'disabled'}><i class="fa-solid fa-rotate-left"></i></button>
+        <button type="button" class="icon-button" data-bot-close title="ปิด" aria-label="ปิดหน้าต่างบอท"><i class="fa-solid fa-xmark"></i></button>
+      </header>
+      <div class="bot-log" data-bot-log aria-live="polite">
+        ${history.length ? history.map((item) => `<div class="chat-msg ${item.role}"><div>${item.role === 'assistant' ? rich(item.text) : esc(item.text)}</div></div>`).join('')
+          : ok ? `<p class="bot-empty"><strong>${esc(bot.name)}</strong> ถนัดเรื่อง${esc(bot.role)} ถามข้อมูลในหน้า “${esc(name)}” ถามวิธีใช้งาน หรือให้ช่วยร่างข้อความได้เลย บอทเห็นข้อมูลชุดเดียวกับที่หน้านี้แสดง ตามปีการศึกษา ตัวกรอง และคำค้นที่เลือกไว้</p>`
+          : `<p class="bot-empty"><strong>${esc(bot.name)}</strong> ยังอ่านข้อมูลในหน้า “${esc(name)}” ไม่ได้ แต่ถามวิธีใช้งานหน้านี้หรือขอคำแนะนำได้ ถ้าต้องการให้สรุปข้อมูล ให้เปิดหน้าที่เป็นตาราง เช่น เยี่ยมบ้าน คัดกรองนักเรียน แผนการสอน หรือใบลา</p>`}
+        ${waiting === id ? '<div class="chat-msg assistant" data-wait><div><i class="fa-solid fa-spinner fa-spin"></i> กำลังอ่านข้อมูลและคิดคำตอบ</div></div>' : ''}
+      </div>
+      ${chips.length ? `<div class="bot-chips">${chips.map((text) => `<button type="button" data-bot-chip>${esc(text)}</button>`).join('')}</div>` : ''}
+      <form class="bot-form" data-bot-form>
+        <textarea name="q" rows="2" maxlength="1000" aria-label="คำถามถึง${attr(bot.name)}" placeholder="${ok ? 'ถามข้อมูลในหน้านี้ ถามวิธีใช้ หรือให้ช่วยร่างข้อความ' : 'ถามวิธีใช้งานหน้านี้'}" ${module ? '' : 'disabled'}></textarea>
+        <button type="submit" class="primary-button" aria-label="ส่งคำถาม" ${module && !waiting ? '' : 'disabled'}><i class="fa-solid fa-paper-plane"></i></button>
+      </form>
+      <p class="bot-foot">คำตอบสร้างโดย AI จากข้อมูลในหน้านี้ ควรตรวจทานก่อนนำไปใช้ ข้อมูลนักเรียนที่ส่งให้ AI มีเฉพาะชื่อต้นกับห้อง</p>`;
+    const log = panel.querySelector('[data-bot-log]');
+    log.scrollTop = log.scrollHeight;
+    const form = panel.querySelector('[data-bot-form]');
+    panel.querySelector('[data-bot-close]').addEventListener('click', close);
+    panel.querySelector('[data-bot-clear]').addEventListener('click', () => { chats[id] = []; paint(); focusInput(); });
+    panel.querySelectorAll('[data-bot-chip]').forEach((chip) => chip.addEventListener('click', () => send(route, bot, chip.textContent)));
+    form.addEventListener('submit', (event) => { event.preventDefault(); send(route, bot, form.elements.q.value); });
+    form.elements.q.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(route, bot, form.elements.q.value); }
+    });
+  }
+
+  function focusInput() {
+    const input = panel.querySelector('textarea');
+    if (input && !input.disabled) input.focus();
+  }
+
+  async function send(route, bot, text) {
+    const question = String(text || '').trim();
+    const module = currentModule();
+    if (!question || waiting || !module || module.route !== route) return;
+    const id = chatId(route, bot);
+    const history = chatOf(id);
+    history.push({ role: 'user', text: question });
+    waiting = id;
+    paint();
+    const view = App.cached('ui:' + module.key) || {};
+    const response = await App.request('bot.ask', { route, bot: bot.key, academicYearId: App.yearIdOrActive(), filters: view.filters || {}, q: view.q || '',
+      studentId: view.studentId || '', homeroomId: view.homeroomId || '', supervisionId: view.supervisionId || '', messages: history.slice(-8) });
+    waiting = '';
+    if (response.ok) history.push({ role: 'assistant', text: response.data.reply });
+    else { history.pop(); App.toast(App.messageOf(response.error), 'error'); }
+    if (!open) return;
+    paint();
+    const current = currentModule();
+    if (!response.ok && current && chatId(current.route, botFor(current)) === id) { const input = panel.querySelector('textarea'); if (input) input.value = question; }
+    focusInput();
+  }
+
+  function hideHello() {
+    clearTimeout(helloTimer);
+    if (hello) hello.hidden = true;
+  }
+  function show() {
+    open = true;
+    hideHello();
+    panel.classList.remove('hidden');
+    dock.classList.add('chatting');
+    button.setAttribute('aria-expanded', 'true');
+    paint();
+    focusInput();
+  }
+  function close() {
+    open = false;
+    panel.classList.add('hidden');
+    dock.classList.remove('chatting');
+    button.setAttribute('aria-expanded', 'false');
+  }
+
+  // ตัวการ์ตูนลอยประจำหน้า: แสดงเมื่อบอทของหน้านั้นใช้ได้ (มี key และบทบาทของผู้ใช้ได้รับสิทธิ์)
+  // เปิดหน้าใหม่ครั้งแรกในรอบการใช้งาน ตัวการ์ตูนทักทายสั้น ๆ แล้วหายไปเอง
+  async function sync() {
+    const user = App.state.user;
+    if (!user) { dock.classList.add('hidden'); close(); hideHello(); return; }
+    if (owner !== String(user.id)) {
+      owner = String(user.id);
+      [chats, picks, greeted].forEach((store) => Object.keys(store).forEach((key) => delete store[key]));
+    }
+    const status = App.state.ai || await App.aiStatus();
+    const module = currentModule();
+    const bot = botFor(module);
+    const usable = !!module && usableBot(bot, status);
+    dock.classList.toggle('hidden', !usable);
+    if (!usable) { close(); hideHello(); return; }
+    dock.style.setProperty('--bot', safeColor(bot.color));
+    if (dock.dataset.bot !== bot.key) {
+      dock.dataset.bot = bot.key;
+      button.querySelector('[data-face]').innerHTML = App.botFace(bot.key);
+      button.querySelector('[data-name]').textContent = bot.name;
+    }
+    button.title = `${bot.name} · ${bot.role} — ถามข้อมูลในหน้านี้ได้`;
+    button.setAttribute('aria-label', `เปิดแชทกับ${bot.name} ผู้ช่วยด้าน${bot.role}`);
+    if (open) { paint(); return; }
+    if (hello && !greeted[module.route]) {
+      greeted[module.route] = true;
+      hello.innerHTML = `<b>${esc(bot.name)}</b> ช่วยเรื่อง${esc(bot.role)} ถามข้อมูลในหน้านี้ได้เลย`;
+      hello.hidden = false;
+      clearTimeout(helloTimer);
+      helloTimer = setTimeout(hideHello, 5000);
+    } else hideHello();
+  }
+
+  if (hello) hello.addEventListener('click', () => { hideHello(); show(); });
+
+  button.addEventListener('click', () => (open ? close() : show()));
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && open && !document.getElementById('modal').open) { close(); button.focus(); } });
+
+  const previousAfterRoute = App.afterRoute;
+  App.afterRoute = (module) => {
+    if (previousAfterRoute) previousAfterRoute(module);
+    sync();
+  };
+  App.syncBot = sync;
+})();
+</script>

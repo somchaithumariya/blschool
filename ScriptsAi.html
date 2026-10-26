@@ -1,0 +1,191 @@
+<script>
+/**
+ * AI กลาง: หน้า "ตั้งค่า AI" (key แยกตามเรื่อง) และ "ผู้ช่วย AI"
+ * พร้อมเครื่องมือร่วมของหน้าระบบงานใหม่: การ์ดสถิติ แถบกราฟ แผนที่ (Leaflet) ปุ่ม AI และหน้าพิมพ์
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const esc = App.esc;
+  const attr = App.attr;
+
+  // ---------- เครื่องมือร่วม ----------
+  App.statCard = (tone, title, value, icon, foot) => `<article class="stat-card ${tone}"><small>${esc(title)}</small><strong>${esc(value)}</strong>
+    <span class="stat-icon"><i class="fa-solid ${icon}"></i></span><p><i class="fa-solid fa-circle-info"></i> ${esc(foot || '')}</p></article>`;
+
+  // แถบกราฟแนวนอน: entries = [[ชื่อ, จำนวน, สี?]]
+  App.barList = (entries, color) => {
+    const max = Math.max(1, ...entries.map((entry) => Number(entry[1]) || 0));
+    if (!entries.length) return '<p class="muted">ยังไม่มีข้อมูล</p>';
+    return `<div class="bar-list">${entries.map(([name, value, tone]) => `<div class="bar-row"><span class="bar-label" title="${attr(name)}">${esc(name)}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${Math.round((Number(value) || 0) * 100 / max)}%;background:${attr(tone || color || 'var(--primary)')}"></span></span>
+      <strong class="bar-value">${App.num(value)}</strong></div>`).join('')}</div>`;
+  };
+
+  App.yearIdOrActive = () => App.state.yearId || ((App.lookupList('academicYears').find((year) => year.isActive) || {}).id) || '';
+
+  // สถานะ AI ของผู้ใช้ (แคชไว้ในหน้า)
+  App.aiStatus = async (force) => {
+    if (!force && App.state.ai) return App.state.ai;
+    if (!force && App.cached('ai:status')) return App.cached('ai:status');
+    const response = await App.call('ai.status', null, { silent: true, quiet: true });
+    return App.remember('ai:status', response.ok ? response.data : {});
+  };
+
+  // เรียก AI แล้วแสดงผลในหน้าต่าง พร้อมปุ่มคัดลอก
+  App.showAi = async (title, action, data, pick) => {
+    const body = App.openModal(title, `<div class="ai-result"><p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> AI กำลังวิเคราะห์ อาจใช้เวลา 5–30 วินาที…</p></div>`);
+    const response = await App.call(action, data, { silent: true, quiet: true });
+    if (!body.isConnected) return null;
+    const box = body.querySelector('.ai-result');
+    if (!response.ok) { box.innerHTML = `<p class="form-error">${esc(App.messageOf(response.error))}</p>`; return null; }
+    const text = pick ? pick(response.data) : (response.data.text || response.data.analysis || response.data.summary || '');
+    box.innerHTML = `<div class="ai-text">${esc(text)}</div><p class="muted"><small>ข้อความนี้สร้างโดย AI กรุณาตรวจทานก่อนนำไปใช้</small></p>
+      <div class="form-actions"><button type="button" class="secondary-button" data-copy><i class="fa-regular fa-copy"></i> คัดลอก</button>
+      <button type="button" class="primary-button" data-close>ปิด</button></div>`;
+    box.querySelector('[data-copy]').addEventListener('click', () => navigator.clipboard.writeText(text).then(() => App.toast('คัดลอกแล้ว', 'success')));
+    box.querySelector('[data-close]').addEventListener('click', App.closeModal);
+    return text;
+  };
+
+  // หน้าพิมพ์แยก (A4)
+  App.printHtml = (title, html) => {
+    const win = window.open('', '_blank');
+    if (!win) return App.toast('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ กรุณาอนุญาตป๊อปอัป', 'error');
+    win.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${esc(title)}</title>
+      <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+      <style>body{font-family:Sarabun,sans-serif;font-size:15px;margin:24px;color:#111}h1,h2,h3{margin:.4em 0}table{border-collapse:collapse;width:100%;margin:8px 0}
+      th,td{border:1px solid #555;padding:5px 7px;vertical-align:top}th{background:#f1f5f9}.center{text-align:center}.right{text-align:right}
+      .sign{display:flex;flex-wrap:wrap;gap:24px;margin-top:40px}.sign div{flex:1;min-width:200px;text-align:center}.muted{color:#555}
+      .photos img{max-width:31%;margin:4px;border:1px solid #ccc}.pre{white-space:pre-line}@page{size:A4;margin:14mm}</style></head>
+      <body>${html}<script>setTimeout(function(){window.print()},600)<\/script></body></html>`);
+    win.document.close();
+  };
+
+  // ---------- แผนที่ (Leaflet จาก cdnjs โหลดเมื่อใช้) ----------
+  let leafletReady = null;
+  function loadAsset(tag, url) {
+    return new Promise((resolve, reject) => {
+      const node = document.createElement(tag);
+      if (tag === 'link') { node.rel = 'stylesheet'; node.href = url; } else { node.src = url; }
+      node.onload = resolve; node.onerror = reject;
+      document.head.appendChild(node);
+    });
+  }
+  App.loadLeaflet = () => {
+    if (window.L) return Promise.resolve(true);
+    if (!leafletReady) {
+      leafletReady = Promise.all([loadAsset('link', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'),
+        loadAsset('script', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js')])
+        .then(() => !!window.L).catch(() => { leafletReady = null; return false; });
+    }
+    return leafletReady;
+  };
+  // points = [{lat, lng, html, color}]
+  App.renderMap = async (container, points, center) => {
+    if (!(await App.loadLeaflet())) { container.innerHTML = '<p class="muted">โหลดแผนที่ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ต</p>'; return null; }
+    container.innerHTML = '';
+    const start = center || (points[0] ? { lat: points[0].lat, lng: points[0].lng } : { lat: 13.7563, lng: 100.5018 });
+    const map = window.L.map(container).setView([start.lat, start.lng], points.length || center ? 13 : 6);
+    window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    if (center) window.L.marker([center.lat, center.lng], { title: 'โรงเรียน' }).addTo(map).bindPopup('<b>โรงเรียน</b>');
+    const layers = points.map((point) => window.L.circleMarker([point.lat, point.lng], { radius: 8, color: '#fff', weight: 2,
+      fillColor: point.color || '#2563eb', fillOpacity: .9 }).addTo(map).bindPopup(point.html));
+    if (layers.length) map.fitBounds(window.L.featureGroup(layers).getBounds().pad(0.2), { maxZoom: 16 });
+    // แผนที่ต้องคำนวณขนาดใหม่เมื่อกรอบเปลี่ยนขนาด (เปิดเมนู/หมุนจอ) ไม่เช่นนั้นภาพพื้นหลังจะโหลดไม่เต็ม
+    if (window.ResizeObserver) new ResizeObserver(() => map.invalidateSize()).observe(container);
+    setTimeout(() => map.invalidateSize(), 300);
+    return map;
+  };
+
+  // ---------- ตั้งค่า AI ----------
+  App.register('#/ai-settings', async () => {
+    const response = await App.call('ai.settings');
+    if (!response.ok) return App.renderError(response.error);
+    const canEdit = App.can('aiSettings.edit');
+    paintSettings(response.data, canEdit);
+  });
+
+  function paintSettings(data, canEdit) {
+    const providerOptions = (selected) => data.providers.map((item) => `<option value="${attr(item.key)}" ${item.key === selected ? 'selected' : ''}>${esc(item.name)}</option>`).join('');
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-robot c-violet"></i> ตั้งค่า AI (แยกตามเรื่อง)</h2>
+        <p>แต่ละเรื่องใช้ API key ของตัวเอง เลือกผู้ให้บริการ/รุ่น เปิด-ปิด และจำกัดจำนวนครั้งต่อชั่วโมงได้ · key เก็บในเซิร์ฟเวอร์ แสดงเฉพาะ 4 ตัวท้าย</p></div></div>
+        <div class="notice">ระบบตัดเลขประจำตัวประชาชน เบอร์โทร และอีเมลออกก่อนส่งให้ AI ทุกครั้ง · ขอ API key ได้จาก Google AI Studio (Gemini),
+          opentyphoon.ai (Typhoon), platform.openai.com หรือ console.anthropic.com</div></section>
+      ${data.features.map((feature) => `<section class="panel ai-feature" data-feature="${attr(feature.key)}">
+        <div class="panel-head"><div><h2>${esc(feature.name)} ${feature.enabled && feature.keyHint ? '<span class="badge success">พร้อมใช้งาน</span>'
+          : feature.enabled ? '<span class="badge warning">ยังไม่มี key</span>' : '<span class="badge info">ปิดอยู่</span>'}</h2><p>${esc(feature.hint)}</p></div>
+          <label class="check-row"><input type="checkbox" name="enabled" ${feature.enabled ? 'checked' : ''} ${canEdit ? '' : 'disabled'}> เปิดใช้งาน</label></div>
+        <div class="form-grid">
+          <label>ผู้ให้บริการ<select name="provider" ${canEdit ? '' : 'disabled'}>${providerOptions(feature.provider)}</select></label>
+          <label>รุ่น (เว้นว่าง = รุ่นแนะนำ)<input name="model" value="${attr(feature.model)}" maxlength="100" ${canEdit ? '' : 'disabled'}></label>
+          <label>API key ${feature.keyHint ? `(ปัจจุบัน ${esc(feature.keyHint)})` : '(ยังไม่มี)'}<input name="apiKey" type="password" autocomplete="off"
+            placeholder="${feature.keyHint ? 'เว้นว่าง = ใช้ key เดิม' : 'วาง API key'}" ${canEdit ? '' : 'disabled'}></label>
+          <label>จำนวนครั้งสูงสุดต่อชั่วโมง<input name="hourlyLimit" type="number" min="1" max="1000" value="${attr(feature.hourlyLimit)}" ${canEdit ? '' : 'disabled'}></label>
+          <div class="wide"><span class="muted">บทบาทที่ใช้ได้:</span> ${data.roles.map((role) => `<label class="check-row inline"><input type="checkbox" name="roles" value="${attr(role.key)}"
+            ${feature.roles.includes(role.key) ? 'checked' : ''} ${canEdit ? '' : 'disabled'}> ${esc(role.name)}</label>`).join(' ')}</div>
+          ${canEdit ? `<div class="wide actions"><button type="button" class="secondary-button" data-test><i class="fa-solid fa-plug-circle-check"></i> ทดสอบการเชื่อมต่อ</button>
+            ${feature.keyHint ? '<label class="check-row inline"><input type="checkbox" name="clearKey"> ลบ API key นี้</label>' : ''}</div>` : ''}
+        </div></section>`).join('')}
+      ${canEdit ? '<div class="form-actions sticky-actions"><button type="button" class="primary-button" data-save><i class="fa-solid fa-floppy-disk"></i> บันทึกการตั้งค่า AI</button></div>' : ''}`);
+    if (!canEdit) return;
+    const root = document.getElementById('page-content');
+    const collect = () => [...root.querySelectorAll('[data-feature]')].map((box) => ({
+      key: box.dataset.feature, enabled: box.querySelector('[name=enabled]').checked, provider: box.querySelector('[name=provider]').value,
+      model: box.querySelector('[name=model]').value.trim(), apiKey: box.querySelector('[name=apiKey]').value.trim(),
+      hourlyLimit: box.querySelector('[name=hourlyLimit]').value, roles: [...box.querySelectorAll('[name=roles]:checked')].map((input) => input.value),
+      clearKey: Boolean(box.querySelector('[name=clearKey]') && box.querySelector('[name=clearKey]').checked)
+    }));
+    root.querySelector('[data-save]').addEventListener('click', async () => {
+      const result = await App.call('ai.saveSettings', { features: collect() });
+      if (!result.ok) return;
+      App.forget('ai:status');
+      App.state.ai = null;
+      if (App.syncBot) App.syncBot();
+      App.toast('บันทึกการตั้งค่า AI แล้ว', 'success');
+      paintSettings(result.data, canEdit);
+    });
+    root.querySelectorAll('[data-test]').forEach((button) => button.addEventListener('click', async () => {
+      const box = button.closest('[data-feature]');
+      if (box.querySelector('[name=apiKey]').value.trim()) return App.toast('กรุณากด "บันทึกการตั้งค่า AI" ก่อนทดสอบ', 'error');
+      await App.showAi('ทดสอบ ' + box.querySelector('h2').firstChild.textContent.trim(), 'ai.test', { feature: box.dataset.feature },
+        (data) => `${data.reply}\n\n(ผู้ให้บริการ: ${data.provider} · รุ่น: ${data.model})`);
+    }));
+  }
+
+  // ---------- ผู้ช่วย AI ----------
+  App.register('#/ai-assistant', async () => {
+    const status = await App.aiStatus(true);
+    const history = App.cached('ai:chat') || App.remember('ai:chat', []);
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-wand-magic-sparkles c-violet"></i> ผู้ช่วย AI</h2>
+        <p>ถามเกี่ยวกับสถิติภาพรวมของโรงเรียน เช่น อัตรามาเรียน ผลคัดกรอง เหตุความไม่ปลอดภัย (AI ไม่เห็นข้อมูลรายบุคคล)</p></div>
+        <button type="button" class="secondary-button" data-clear><i class="fa-solid fa-broom"></i> เริ่มใหม่</button></div>
+      ${status.assistant ? '' : '<div class="notice">ผู้ช่วย AI ยังไม่เปิดใช้งาน หรือบทบาทของคุณยังไม่ได้รับสิทธิ์ (ผู้ดูแลระบบตั้งค่าได้ที่เมนู "ตั้งค่า AI")</div>'}
+      <div class="chat-log" data-log>${history.length ? '' : `<p class="muted">ตัวอย่างคำถาม: “สรุปภาพรวมนักเรียนกลุ่มเสี่ยงให้หน่อย” · “เหตุความไม่ปลอดภัยด้านไหนมากที่สุด ควรทำอย่างไร”</p>`}</div>
+      <form class="chat-form" data-form><textarea name="q" rows="2" maxlength="1000" placeholder="พิมพ์คำถาม…" ${status.assistant ? '' : 'disabled'}></textarea>
+        <button type="submit" class="primary-button" ${status.assistant ? '' : 'disabled'}><i class="fa-solid fa-paper-plane"></i> ส่ง</button></form></section>`);
+    const root = document.getElementById('page-content');
+    const log = root.querySelector('[data-log]');
+    const paint = () => {
+      if (history.length) log.innerHTML = history.map((item) => `<div class="chat-msg ${item.role}"><div>${esc(item.text)}</div></div>`).join('');
+      log.scrollTop = log.scrollHeight;
+    };
+    paint();
+    root.querySelector('[data-clear]').addEventListener('click', () => { history.length = 0; App.route(); });
+    const form = root.querySelector('[data-form]');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const text = form.elements.q.value.trim();
+      if (!text) return;
+      history.push({ role: 'user', text });
+      form.elements.q.value = '';
+      paint();
+      log.insertAdjacentHTML('beforeend', '<div class="chat-msg assistant" data-wait><div><i class="fa-solid fa-spinner fa-spin"></i> กำลังคิด…</div></div>');
+      const response = await App.call('ai.assistant', { messages: history.slice(-8) }, { silent: true, quiet: true });
+      if (response.ok) history.push({ role: 'assistant', text: response.data.reply });
+      else { history.pop(); App.toast(App.messageOf(response.error), 'error'); }
+      if (location.hash === '#/ai-assistant') paint();
+    });
+  });
+})();
+</script>

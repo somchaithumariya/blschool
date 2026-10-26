@@ -1,0 +1,216 @@
+<script>
+/**
+ * การมาเรียน: เช็กชื่อรายคาบ, บันทึกเวลาเรียนรายเดือน, รายงาน, สรุปมาสาย/ขาด, ส่งออก
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+  const LABELS = { P: 'มา', L: 'สาย', E: 'ลา', A: 'ขาด' };
+  const SHORT = { P: '/', L: 'ส', E: 'ล', A: 'ข' };
+  const ui = App.remember('ui:attendance', { date: App.todayIso(), homeroomId: '', period: '1', from: '', to: '', month: App.todayIso().slice(0, 7), minCount: 1 });
+
+  function homeroomSelect(value, empty) {
+    return `<label>ห้องเรียน<select data-homeroom>${App.options('homerooms', value, { yearId: App.state.yearId, empty: empty || '— เลือกห้อง —' })}</select></label>`;
+  }
+  function yearSelect() { return `<label>ปีการศึกษา<select data-year>${App.yearOptions()}</select></label>`; }
+  function defaultRange() {
+    if (!ui.from) { ui.from = App.todayIso().slice(0, 8) + '01'; ui.to = App.todayIso(); }
+  }
+  function bindCommon(root, rerender) {
+    const year = root.querySelector('[data-year]');
+    if (year) year.addEventListener('change', () => { App.state.yearId = year.value; ui.homeroomId = ''; rerender(); });
+    const homeroom = root.querySelector('[data-homeroom]');
+    if (homeroom) homeroom.addEventListener('change', () => { ui.homeroomId = homeroom.value; });
+  }
+  function studentName(studentId) { return App.label('students', studentId); }
+
+  // ---------- เช็กชื่อรายคาบ ----------
+  App.register('#/attendance', async () => {
+    const periods = App.lookupList('periods');
+    App.content(`<section class="panel no-print"><div class="toolbar">
+        ${yearSelect()}
+        <label>วันที่<input type="date" data-date value="${attr(ui.date)}"></label>
+        ${homeroomSelect(ui.homeroomId)}
+        <label>คาบ<select data-period><option value="0" ${ui.period === '0' ? 'selected' : ''}>โฮมรูม/ทั้งวัน</option>
+          ${(periods.length ? periods : Array.from({ length: 8 }, (_, index) => ({ periodNo: index + 1 }))).map((period) =>
+            `<option value="${period.periodNo}" ${String(period.periodNo) === ui.period ? 'selected' : ''}>คาบ ${period.periodNo}${period.startTime ? ' (' + esc(period.startTime) + '-' + esc(period.endTime) + ')' : ''}</option>`).join('')}</select></label>
+        <div class="actions"><button type="button" class="primary-button" data-load><i class="fa-solid fa-magnifying-glass"></i> เปิดรายชื่อ</button></div>
+      </div></section><div id="attendance-sheet"></div>`);
+    const root = document.getElementById('page-content');
+    bindCommon(root, () => App.route());
+    root.querySelector('[data-date]').addEventListener('change', (event) => { ui.date = event.target.value; });
+    root.querySelector('[data-period]').addEventListener('change', (event) => { ui.period = event.target.value; });
+    root.querySelector('[data-load]').addEventListener('click', loadSheet);
+    if (ui.homeroomId) loadSheet();
+  });
+
+  async function loadSheet() {
+    const target = document.getElementById('attendance-sheet');
+    if (!ui.homeroomId) return App.toast('กรุณาเลือกห้องเรียน', 'error');
+    const response = await App.call('attendance.get', { date: ui.date, homeroomId: ui.homeroomId, period: ui.period });
+    if (!response.ok) return;
+    const data = response.data;
+    const records = {};
+    data.students.forEach((student) => { records[student.studentId] = Object.assign({ s: 'P', n: '' }, data.records[student.studentId] || {}); });
+    const canSave = data.session ? App.can('attendance.edit') : App.can('attendance.add');
+    const subject = data.session ? data.session.subjectName : (data.scheduled ? data.scheduled.subjectName : '');
+    const teacher = data.session ? data.session.teacherId : (data.scheduled ? data.scheduled.teacherId : '');
+    target.innerHTML = `<section class="panel">
+      <div class="panel-head"><div><h2>${esc(App.label('homerooms', ui.homeroomId))} · ${ui.period === '0' ? 'โฮมรูม' : 'คาบ ' + esc(ui.period)} · ${App.fmtDate(ui.date)}</h2>
+        <p>${data.session ? '<span class="badge success">บันทึกแล้ว</span> แก้ไขล่าสุด ' + App.fmtDateTime(data.session.updatedAt) : '<span class="badge warning">ยังไม่บันทึก</span>'}
+        ${data.holiday ? ' · <span class="badge danger">วันหยุด: ' + esc(data.holiday) + '</span>' : ''}</p></div>
+        <div class="actions no-print"><button type="button" class="secondary-button" data-all="P">มาทั้งหมด</button></div></div>
+      <div class="toolbar"><label class="grow">รายวิชา<input data-subject value="${attr(subject)}" maxlength="150"></label>
+        <label>ครูผู้สอน<select data-teacher>${App.options('personnel', teacher || App.state.user.personnelId)}</select></label></div>
+      <div class="summary-strip" data-summary></div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th class="num">เลขที่</th><th>เลขประจำตัว</th><th>ชื่อ-สกุล</th><th>สถานะ</th><th>หมายเหตุ</th></tr></thead>
+        <tbody>${data.students.length ? data.students.map((student) => `<tr data-student="${attr(student.studentId)}">
+          <td class="num">${esc(student.number)}</td><td>${esc(student.code)}</td><td>${esc(student.name)}</td>
+          <td><span class="status-group">${Object.keys(LABELS).map((code) => `<button type="button" data-s="${code}" class="${records[student.studentId].s === code ? 'on' : ''}">${LABELS[code]}</button>`).join('')}</span></td>
+          <td><input data-note maxlength="200" value="${attr(records[student.studentId].n)}"></td></tr>`).join('')
+          : '<tr><td colspan="5" class="empty-row">ยังไม่มีนักเรียนในห้องนี้ กรุณาเพิ่มที่เมนู “นักเรียนรายห้อง/รายปี”</td></tr>'}</tbody></table></div>
+      ${canSave && data.students.length ? '<div class="form-actions"><button type="button" class="primary-button" data-save><i class="fa-solid fa-floppy-disk"></i> บันทึกการเช็กชื่อ</button></div>' : ''}
+    </section>`;
+    const summary = () => {
+      const counts = { P: 0, L: 0, E: 0, A: 0 };
+      Object.values(records).forEach((record) => { counts[record.s] += 1; });
+      target.querySelector('[data-summary]').innerHTML = Object.keys(LABELS).map((code) => `<span class="s-${code}">${LABELS[code]} ${counts[code]}</span>`).join('') + `<span>รวม ${data.students.length}</span>`;
+    };
+    summary();
+    target.querySelectorAll('tr[data-student]').forEach((row) => {
+      const id = row.dataset.student;
+      row.querySelectorAll('[data-s]').forEach((button) => button.addEventListener('click', () => {
+        records[id].s = button.dataset.s;
+        row.querySelectorAll('[data-s]').forEach((item) => item.classList.toggle('on', item === button));
+        summary();
+      }));
+      row.querySelector('[data-note]').addEventListener('input', (event) => { records[id].n = event.target.value; });
+    });
+    target.querySelector('[data-all]').addEventListener('click', () => {
+      Object.values(records).forEach((record) => { record.s = 'P'; });
+      target.querySelectorAll('[data-s]').forEach((button) => button.classList.toggle('on', button.dataset.s === 'P'));
+      summary();
+    });
+    const save = target.querySelector('[data-save]');
+    if (save) save.addEventListener('click', async () => {
+      const result = await App.call('attendance.save', { date: ui.date, homeroomId: ui.homeroomId, period: ui.period,
+        subjectName: target.querySelector('[data-subject]').value, teacherId: target.querySelector('[data-teacher]').value,
+        version: data.session && data.session.version, records });
+      if (!result.ok) return;
+      App.forget('dashboard'); App.forget('report:');
+      App.toast('บันทึกการเช็กชื่อแล้ว', 'success');
+      loadSheet();
+    });
+  }
+
+  // ---------- บันทึกเวลาเรียน (รายเดือน) ----------
+  App.register('#/attendance-register', () => {
+    App.content(`<section class="panel no-print"><div class="toolbar">${yearSelect()}${homeroomSelect(ui.homeroomId)}
+      <label>เดือน<input type="month" data-month value="${attr(ui.month)}"></label>
+      <div class="actions"><button type="button" class="primary-button" data-load>แสดง</button>
+        <button type="button" class="secondary-button" onclick="window.print()"><i class="fa-solid fa-print"></i> พิมพ์</button></div></div></section>
+      <div id="register-sheet"></div>`);
+    const root = document.getElementById('page-content');
+    bindCommon(root, () => App.route());
+    root.querySelector('[data-month]').addEventListener('change', (event) => { ui.month = event.target.value; });
+    root.querySelector('[data-load]').addEventListener('click', loadRegister);
+    if (ui.homeroomId) loadRegister();
+  });
+
+  async function loadRegister() {
+    if (!ui.homeroomId) return App.toast('กรุณาเลือกห้องเรียน', 'error');
+    const response = await App.call('attendance.register', { homeroomId: ui.homeroomId, month: ui.month });
+    if (!response.ok) return;
+    const { days, students, grid } = response.data;
+    document.getElementById('register-sheet').innerHTML = `<section class="panel print-sheet">
+      <h2>บันทึกเวลาเรียน ห้อง ${esc(App.label('homerooms', ui.homeroomId))}</h2>
+      <p class="meta"><span>เดือน ${esc(ui.month)}</span><span>ใช้สัญลักษณ์: / มา · ส สาย · ล ลา · ข ขาด</span></p>
+      <div class="table-wrap"><table class="data-table register-table"><thead><tr><th>ที่</th><th>ชื่อ-สกุล</th>
+        ${days.map((day) => `<th>${day}</th>`).join('')}<th>มา</th><th>สาย</th><th>ลา</th><th>ขาด</th></tr></thead>
+        <tbody>${students.map((student) => {
+          const row = grid[student.studentId] || {};
+          const count = { P: 0, L: 0, E: 0, A: 0 };
+          Object.values(row).forEach((status) => { count[status] += 1; });
+          return `<tr><td>${esc(student.number)}</td><td>${esc(student.name)}</td>
+            ${days.map((day) => row[day] ? `<td class="s-${row[day]}">${SHORT[row[day]]}</td>` : '<td></td>').join('')}
+            <td>${count.P}</td><td>${count.L}</td><td>${count.E}</td><td>${count.A}</td></tr>`;
+        }).join('') || `<tr><td colspan="${days.length + 6}" class="empty-row">ไม่มีข้อมูล</td></tr>`}</tbody></table></div></section>`;
+  }
+
+  // ---------- รายงานการมาเรียน ----------
+  function rangeFields() {
+    defaultRange();
+    return `<label>ตั้งแต่<input type="date" data-from value="${attr(ui.from)}"></label><label>ถึง<input type="date" data-to value="${attr(ui.to)}"></label>`;
+  }
+  function bindRange(root) {
+    root.querySelector('[data-from]').addEventListener('change', (event) => { ui.from = event.target.value; });
+    root.querySelector('[data-to]').addEventListener('change', (event) => { ui.to = event.target.value; });
+  }
+
+  App.register('#/attendance-reports', () => {
+    App.content(`<section class="panel no-print"><div class="toolbar">${yearSelect()}${homeroomSelect(ui.homeroomId)}${rangeFields()}
+      <div class="actions"><button type="button" class="primary-button" data-load>แสดงรายงาน</button></div></div></section><div id="report"></div>`);
+    const root = document.getElementById('page-content');
+    bindCommon(root, () => App.route()); bindRange(root);
+    root.querySelector('[data-load]').addEventListener('click', async () => {
+      if (!ui.homeroomId) return App.toast('กรุณาเลือกห้องเรียน', 'error');
+      const response = await App.call('attendance.report', { homeroomId: ui.homeroomId, from: ui.from, to: ui.to });
+      if (!response.ok) return;
+      const rows = response.data.rows;
+      const header = ['เลขที่', 'เลขประจำตัว', 'ชื่อ-สกุล', 'มา', 'สาย', 'ลา', 'ขาด', 'รวมคาบ', 'ร้อยละมาเรียน'];
+      const values = rows.map((row) => [row.number, row.code, row.name, row.P, row.L, row.E, row.A, row.total, row.rate ?? '-']);
+      document.getElementById('report').innerHTML = `<section class="panel print-sheet">
+        <div class="panel-head"><div><h2>รายงานการมาเรียน ห้อง ${esc(App.label('homerooms', ui.homeroomId))}</h2>
+          <p>${App.fmtDate(ui.from)} – ${App.fmtDate(ui.to)} · บันทึกทั้งหมด ${response.data.sessionCount} คาบ</p></div>
+          <div class="actions no-print"><button type="button" class="secondary-button" data-csv>ส่งออก CSV</button><button type="button" class="secondary-button" onclick="window.print()">พิมพ์</button></div></div>
+        ${table(header, values, (row) => row[8] !== '-' && row[8] < 80 ? 'style="background:#fff1f2"' : '')}</section>`;
+      document.querySelector('[data-csv]').addEventListener('click', () => App.downloadCsv('รายงานการมาเรียน.csv', header, values));
+    });
+  });
+
+  function table(header, rows, rowAttr) {
+    return `<div class="table-wrap"><table class="data-table"><thead><tr>${header.map((name) => `<th>${esc(name)}</th>`).join('')}</tr></thead>
+      <tbody>${rows.length ? rows.map((row) => `<tr ${rowAttr ? rowAttr(row) : ''}>${row.map((cell) => `<td>${esc(cell)}</td>`).join('')}</tr>`).join('')
+        : `<tr><td colspan="${header.length}" class="empty-row">ไม่มีข้อมูล</td></tr>`}</tbody></table></div>`;
+  }
+  App.simpleTable = table;
+
+  // ---------- สรุปมาสายและขาดเรียน ----------
+  App.register('#/late-absence', () => {
+    App.content(`<section class="panel no-print"><div class="toolbar">${yearSelect()}${homeroomSelect(ui.homeroomId, 'ทุกห้อง')}${rangeFields()}
+      <label>จำนวนครั้งขั้นต่ำ<input type="number" min="1" data-min value="${attr(ui.minCount)}"></label>
+      <div class="actions"><button type="button" class="primary-button" data-load>แสดง</button></div></div></section><div id="report"></div>`);
+    const root = document.getElementById('page-content');
+    bindCommon(root, () => App.route()); bindRange(root);
+    root.querySelector('[data-min]').addEventListener('change', (event) => { ui.minCount = event.target.value; });
+    root.querySelector('[data-load]').addEventListener('click', async () => {
+      const response = await App.call('attendance.lateAbsence', { homeroomId: ui.homeroomId, from: ui.from, to: ui.to, minCount: ui.minCount });
+      if (!response.ok) return;
+      const header = ['ห้อง', 'นักเรียน', 'มาสาย (คาบ)', 'ขาด (คาบ)', 'จำนวนวันที่มีปัญหา'];
+      const values = response.data.rows.map((row) => [App.label('homerooms', row.homeroomId), studentName(row.studentId), row.L, row.A, row.days]);
+      document.getElementById('report').innerHTML = `<section class="panel print-sheet"><div class="panel-head"><div><h2>สรุปมาสายและขาดเรียน</h2>
+        <p>${App.fmtDate(ui.from)} – ${App.fmtDate(ui.to)} · ${values.length} คน</p></div>
+        <div class="actions no-print"><button type="button" class="secondary-button" data-csv>ส่งออก CSV</button><button type="button" class="secondary-button" onclick="window.print()">พิมพ์</button></div></div>
+        ${table(header, values)}</section>`;
+      document.querySelector('[data-csv]').addEventListener('click', () => App.downloadCsv('สรุปมาสายขาดเรียน.csv', header, values));
+    });
+  });
+
+  // ---------- ส่งออกข้อมูลการมาเรียน ----------
+  App.register('#/attendance-export', () => {
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-file-export c-sky"></i> ส่งออกข้อมูลการมาเรียน</h2>
+      <p>ไฟล์ CSV เปิดได้ด้วย Excel หรือ Google Sheets (1 แถวต่อนักเรียน 1 คน ต่อ 1 คาบ)</p></div></div>
+      <div class="toolbar">${yearSelect()}${homeroomSelect(ui.homeroomId, 'ทุกห้อง')}${rangeFields()}
+      <div class="actions"><button type="button" class="primary-button" data-export><i class="fa-solid fa-download"></i> ดาวน์โหลด CSV</button></div></div></section>`);
+    const root = document.getElementById('page-content');
+    bindCommon(root, () => App.route()); bindRange(root);
+    root.querySelector('[data-export]').addEventListener('click', async () => {
+      const response = await App.call('attendance.export', { homeroomId: ui.homeroomId, from: ui.from, to: ui.to });
+      if (!response.ok) return;
+      if (!response.data.rows.length) return App.toast('ไม่พบข้อมูลในช่วงวันที่ที่เลือก', 'error');
+      App.downloadCsv(`การมาเรียน_${ui.from}_${ui.to}.csv`, response.data.header, response.data.rows);
+    });
+  });
+})();
+</script>

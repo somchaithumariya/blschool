@@ -1,0 +1,607 @@
+<script>
+/**
+ * หน้าทั่วไป: แดชบอร์ด (SOS + สถิติ + กราฟ), แอปทั้งหมด, โปรไฟล์, ตั้งค่าระบบ, ข้อมูลหลัก, ปีการศึกษา
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+
+  // ---------- แดชบอร์ด ----------
+  App.register('#/dashboard', async () => {
+    const cachedData = App.cached('dashboard');
+    if (cachedData) paintDashboard(cachedData);
+    const response = await App.call('dashboard.get', null, { silent: !!cachedData, quiet: !!cachedData });
+    if (location.hash !== '#/dashboard' && location.hash !== '') return;
+    if (!response.ok) { if (!cachedData) App.renderError(response.error); return; }
+    paintDashboard(App.remember('dashboard', response.data));
+  });
+
+  function paintDashboard(data) {
+    const c = data.counts;
+    const a = data.attendance;
+    const todayTotal = a.today.P + a.today.L + a.today.E + a.today.A;
+    App.content(`
+      ${data.pendingRegistrations ? `<div class="pending-banner"><i class="fa-solid fa-user-clock c-blue"></i><div class="grow">
+        มีผู้สมัครสมาชิกรออนุมัติ <strong>${data.pendingRegistrations}</strong> คน</div><a class="primary-button" href="#/users">ตรวจสอบ</a></div>` : ''}
+      ${data.concerns && (data.concerns.waiting || data.concerns.unread || data.concerns.urgent) ? `<div class="pending-banner concern-banner"><i class="fa-solid fa-ear-listen c-rose"></i><div class="grow">
+        ห้องรับฟัง: รอรับเรื่อง <strong>${data.concerns.waiting}</strong> · ข้อความใหม่ <strong>${data.concerns.unread}</strong> · เร่งด่วน/ฉุกเฉินที่ยังไม่ปิด <strong>${data.concerns.urgent}</strong></div>
+        <a class="primary-button" href="#/student-concerns">เปิดดู</a></div>` : ''}
+      ${data.sos && data.sos.length ? `<section class="sos-alerts">${data.sos.map((alert) => `<div class="sos-alert">
+        <i class="fa-solid fa-triangle-exclamation c-rose"></i><div class="grow"><strong>${esc(alert.message)}</strong>
+        <div class="muted">${esc(alert.location || '')} · ${esc(alert.sender)} · ${App.fmtDateTime(alert.createdAt)}</div></div>
+        <button type="button" class="secondary-button" data-ack="${attr(alert.id)}">รับทราบ</button></div>`).join('')}</section>` : ''}
+      <section class="sos-card">
+        <div><p class="eyebrow"><i class="fa-solid fa-circle-exclamation"></i> ช่องทางแจ้งเหตุฉุกเฉินสำหรับครู</p>
+          <h2>แจ้งเหตุด่วน SOS</h2>
+          <p>กดปุ่มเมื่อมีเหตุที่ต้องการให้ผู้ดูแลระบบรับทราบทันที ระบบจะแจ้งเตือนบนแดชบอร์ดของผู้ดูแลระบบและผู้บริหาร</p>
+          <span class="sos-note"><i class="fa-solid fa-circle-info"></i> ส่งต่อทาง LINE/Telegram ด้วย ถ้าผู้ดูแลระบบเปิดการแจ้งเตือนไว้</span></div>
+        <div class="sos-side"><button type="button" class="sos-button" data-sos><i class="fa-solid fa-triangle-exclamation"></i><strong>SOS</strong><small>แจ้งเหตุด่วน</small></button>
+          <button type="button" class="secondary-button" data-emergency><i class="fa-solid fa-phone"></i> เบอร์ฉุกเฉิน</button></div>
+      </section>
+      ${App.can('safety.view') || App.can('homeVisit.view') ? '<section class="panel dash-map-panel" id="dash-map"><p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> กำลังโหลดแผนที่…</p></section>' : ''}
+      <section class="stat-grid">
+        ${stat('blue', 'ผู้บริหาร', c.executives, 'fa-user-tie', 'fa-users', 'จำนวนผู้บริหารทั้งหมด')}
+        ${stat('green', 'ครู', c.teachers, 'fa-chalkboard-user', 'fa-user-check', 'จำนวนครูทั้งหมด')}
+        ${stat('amber', 'บุคลากรทางการศึกษา', c.staff, 'fa-id-card', 'fa-people-group', 'เจ้าหน้าที่และบุคลากรสนับสนุน')}
+        ${stat('purple', 'นักเรียน', c.students, 'fa-user-graduate', 'fa-school', 'จำนวนผู้เรียนทั้งหมด')}
+      </section>
+      <section class="chart-grid">
+        <article class="chart-card"><header><div><h3>แนวโน้มอัตรามาเรียน</h3><p>30 วันล่าสุด</p></div><span class="chart-tag line">LINE</span></header>
+          ${lineChart(a.trend)}</article>
+        <article class="chart-card"><header><div><h3>สถานะนักเรียนวันนี้</h3><p>มา/สาย/ลา/ขาด (รายคาบ)</p></div><span class="chart-tag doughnut">DOUGHNUT</span></header>
+          ${donutChart([['มา', a.today.P, '#4ade80'], ['สาย', a.today.L, '#fbbf24'], ['ลา', a.today.E, '#60a5fa'], ['ขาด', a.today.A, '#f87171']], true, todayTotal)}</article>
+        <article class="chart-card"><header><div><h3>สถานะการเช็กชื่อวันนี้</h3><p>เช็กแล้ว/ยังไม่เช็ก ตามตารางสอน</p></div><span class="chart-tag pie">PIE</span></header>
+          ${donutChart([['เช็กแล้ว', a.sessionsDone, '#4ade80'], ['ยังไม่เช็ก', Math.max(0, a.sessionsExpected - a.sessionsDone), '#fcd34d']], false, a.sessionsExpected)}</article>
+      </section>
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-bullhorn c-rose"></i> ประกาศล่าสุด</h2></div>
+        ${App.can('announcement.view') ? '<a class="secondary-button" href="#/announcements">ดูทั้งหมด</a>' : ''}</div>
+        ${data.announcements.length ? data.announcements.map((item) => `<div class="announcement"><h4>${item.isPinned ? '<i class="fa-solid fa-thumbtack c-rose"></i> ' : ''}${esc(item.title)}</h4>
+          <p>${App.fmtDate(item.publishDate)} · ${esc(String(item.body || '').slice(0, 200))}</p></div>`).join('') : '<p class="muted">ยังไม่มีประกาศ</p>'}
+      </section>`);
+    const root = document.getElementById('page-content');
+    if (document.getElementById('dash-map')) loadDashboardMap();
+    root.querySelector('[data-sos]').addEventListener('click', App.openSos);
+    root.querySelector('[data-emergency]').addEventListener('click', () => App.showEmergency(''));
+    root.querySelectorAll('[data-ack]').forEach((button) => button.addEventListener('click', async () => {
+      const response = await App.call('sos.acknowledge', { id: button.dataset.ack });
+      if (!response.ok) return;
+      data.sos = response.data.alerts;
+      paintDashboard(data);
+    }));
+  }
+
+  // ---------- แผนที่บนแดชบอร์ด: บ้านนักเรียน จุดเสี่ยง เหตุการณ์ (เปิด/ปิดแต่ละชั้นได้) ----------
+  const HOME_COLORS = { 'ยากจน': '#dc2626', 'ขาดแคลน': '#d97706', 'พอเพียง': '#16a34a' };
+  const RISK_COLORS = { 'สูงมาก': '#991b1b', 'สูง': '#ea580c', 'ปานกลาง': '#ca8a04', 'ต่ำ': '#65a30d' };
+  const SEVERITY_COLORS = [[/^วิกฤต/, '#7f1d1d'], [/^รุนแรง/, '#dc2626'], [/^ปานกลาง/, '#f97316'], [/^น้อย/, '#eab308']];
+  const DONE_COLOR = '#94a3b8';
+  const mapUi = { homes: true, risks: true, incidents: true, openOnly: false };
+  let mapRequest = null;
+
+  async function loadDashboardMap() {
+    const box = document.getElementById('dash-map');
+    const yearId = App.yearIdOrActive();
+    let data = App.cached('dashboard:map');
+    if (!data || data.academicYearId !== yearId) {
+      mapRequest = mapRequest || App.call('dashboard.map', { academicYearId: yearId }, { silent: true, quiet: true }).finally(() => { mapRequest = null; });
+      const response = await mapRequest;
+      if (!response.ok) { if (box.isConnected) box.innerHTML = `<p class="muted">${esc(App.messageOf(response.error))}</p>`; return; }
+      data = App.remember('dashboard:map', response.data);
+    }
+    if (box.isConnected) paintDashboardMap(box, data);
+  }
+
+  function paintDashboardMap(box, data) {
+    const layers = [['incidents', 'เหตุการณ์/อุบัติเหตุ', 'fa-triangle-exclamation', data.incidents], ['risks', 'จุดเสี่ยง', 'fa-helmet-safety', data.risks],
+      ['homes', 'บ้านนักเรียน' + (data.homesScope && data.homesScope !== 'ทั้งโรงเรียน' ? ' (' + data.homesScope + ')' : ''), 'fa-house', data.homes]].filter((layer) => layer[3]);
+    const openCount = (list) => (list || []).filter((item) => item.open).length;
+    box.innerHTML = `<div class="panel-head"><div><h2><i class="fa-solid fa-map-location-dot c-green"></i> แผนที่ความปลอดภัยและบ้านนักเรียน</h2>
+        <p>ปีการศึกษา ${esc(App.label('academicYears', data.academicYearId) || '')} · แสดงเฉพาะรายการที่บันทึกพิกัดไว้ · กดหมุดเพื่อดูรายละเอียด</p></div>
+        <div class="actions no-print">${App.can('safety.edit') ? '<button type="button" class="secondary-button" data-quick-report><i class="fa-solid fa-triangle-exclamation"></i> แจ้งเหตุ</button>' : ''}</div></div>
+      <div class="map-filters no-print">${layers.map(([key, label, icon, list]) => `<label class="map-filter ${key}"><input type="checkbox" data-layer="${key}" ${mapUi[key] ? 'checked' : ''}>
+          <i class="fa-solid ${icon}"></i> ${esc(label)} <b>${App.num(list.length)}</b>${key !== 'homes' ? ` <small>(ยังไม่${key === 'risks' ? 'แก้ไข' : 'ปิด'} ${openCount(list)})</small>` : ''}</label>`).join('')}
+        ${data.incidents || data.risks ? `<label class="map-filter plain"><input type="checkbox" data-open-only ${mapUi.openOnly ? 'checked' : ''}> เฉพาะที่ยังไม่แก้ไข/ไม่ปิด</label>` : ''}</div>
+      <div class="dash-map" data-map></div>
+      <div class="map-legend">${data.homes ? `<span><b>บ้าน:</b> ${Object.entries(HOME_COLORS).map(([name, color]) => `<i style="background:${color}"></i>${name}`).join(' ')}</span>` : ''}
+        ${data.risks ? `<span><b>จุดเสี่ยง:</b> ${Object.entries(RISK_COLORS).map(([name, color]) => `<i style="background:${color}"></i>${name}`).join(' ')}</span>` : ''}
+        ${data.incidents ? `<span><b>เหตุการณ์:</b> ${SEVERITY_COLORS.map(([pattern, color]) => `<i style="background:${color}"></i>${String(pattern).replace(/[\^\/]/g, '')}`).join(' ')}</span>` : ''}
+        ${data.risks || data.incidents ? `<span><i style="background:${DONE_COLOR}"></i>แก้ไขแล้ว/ปิดแล้ว</span>` : ''}</div>`;
+    const quick = box.querySelector('[data-quick-report]');
+    if (quick) quick.addEventListener('click', () => App.openQuickReport && App.openQuickReport());
+    drawDashboardMap(box, data);
+    box.querySelectorAll('[data-layer]').forEach((input) => input.addEventListener('change', () => { mapUi[input.dataset.layer] = input.checked; drawDashboardMap(box, data); }));
+    const only = box.querySelector('[data-open-only]');
+    if (only) only.addEventListener('change', () => { mapUi.openOnly = only.checked; drawDashboardMap(box, data); });
+  }
+
+  // หมุดบ้านนักเรียนเล็กกว่า เพื่อไม่ให้บังหมุดเหตุการณ์/จุดเสี่ยงเมื่อมีบ้านจำนวนมาก
+  function marker(icon, color, faded) {
+    const small = icon === 'fa-house';
+    const size = small ? 22 : 28;
+    return window.L.divIcon({ className: 'map-pin-wrap', iconSize: [size, size], iconAnchor: [size / 2, size / 2], popupAnchor: [0, -10],
+      html: `<span class="map-pin${small ? ' small' : ''}${faded ? ' faded' : ''}" style="background:${color}"><i class="fa-solid ${icon}"></i></span>` });
+  }
+
+  async function drawDashboardMap(box, data) {
+    const holder = box.querySelector('[data-map]');
+    if (!(await App.loadLeaflet())) { holder.innerHTML = '<p class="muted">โหลดแผนที่ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ต</p>'; return; }
+    if (!holder.isConnected) return;
+    if (holder._map) holder._map.remove();
+    holder.innerHTML = '';
+    const L = window.L;
+    const school = data.school && isFinite(data.school.lat) && data.school.lat ? data.school : null;
+    const map = L.map(holder, { scrollWheelZoom: false });
+    holder._map = map;
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    const pins = [];
+    const add = (lat, lng, icon, color, faded, html) => pins.push(L.marker([lat, lng], { icon: marker(icon, color, faded),
+      zIndexOffset: icon === 'fa-house' ? 0 : faded ? 500 : 1000 }).bindPopup(html).addTo(map));
+    const link = (kind, id) => `<button type="button" class="map-open" data-map-open="${attr(kind)}" data-id="${attr(id)}">เปิดรายการ</button>`;
+    if (school) L.marker([school.lat, school.lng], { icon: marker('fa-school', '#1e3a5f') }).bindPopup('<b>โรงเรียน</b>').addTo(map);
+    if (mapUi.homes && data.homes) data.homes.forEach((home) => add(home.lat, home.lng, 'fa-house', HOME_COLORS[home.economicStatus] || '#64748b', false,
+      `<b>${esc(home.name)}</b><br>ห้อง ${esc(home.room)} · ฐานะ ${esc(home.economicStatus || '-')}<br>เยี่ยมบ้าน ${App.fmtDate(home.visitDate)}${home.distanceKm ? ' · ' + esc(home.distanceKm) + ' กม.' : ''}<br>${link('student', home.studentId)}`));
+    if (mapUi.risks && data.risks) data.risks.filter((risk) => !mapUi.openOnly || risk.open).forEach((risk) => add(risk.lat, risk.lng, 'fa-helmet-safety',
+      risk.open ? RISK_COLORS[risk.level] || '#ca8a04' : DONE_COLOR, !risk.open,
+      `<b>จุดเสี่ยง: ${esc(risk.location || '')}</b><br>${esc(risk.title)}<br>ระดับ ${esc(risk.level || '-')} · ${esc(risk.status || '')}<br>พบ ${App.fmtDate(risk.date)}<br>${link('safety-risks', risk.id)}`));
+    if (mapUi.incidents && data.incidents) data.incidents.filter((item) => !mapUi.openOnly || item.open).forEach((item) => add(item.lat, item.lng, 'fa-triangle-exclamation',
+      item.open ? (SEVERITY_COLORS.find(([pattern]) => pattern.test(item.severity || '')) || [0, '#f97316'])[1] : DONE_COLOR, !item.open,
+      `<b>${esc(item.title)}</b><br>${esc(item.location || '')} · ${App.fmtDate(item.date)}<br>${esc(item.severity || '')} · ${esc(item.status || '')}<br>${link('safety-incidents', item.id)}`));
+    const all = pins.map((pin) => pin.getLatLng()).concat(school ? [L.latLng(school.lat, school.lng)] : []);
+    if (all.length) map.fitBounds(L.latLngBounds(all).pad(0.15), { maxZoom: 16 }); else map.setView([13.7563, 100.5018], 6);
+    if (!pins.length) holder.insertAdjacentHTML('beforeend', '<div class="map-empty">ยังไม่มีรายการที่บันทึกพิกัด — ใส่พิกัดได้ในฟอร์มเยี่ยมบ้าน แจ้งเหตุ และจุดเสี่ยง (ปุ่ม “ใช้ตำแหน่งปัจจุบัน”)</div>');
+    map.on('popupopen', (event) => {
+      const button = event.popup.getElement().querySelector('[data-map-open]');
+      if (button) button.addEventListener('click', () => openFromMap(button.dataset.mapOpen, button.dataset.id));
+    });
+    if (window.ResizeObserver) new ResizeObserver(() => map.invalidateSize()).observe(holder);
+    setTimeout(() => map.invalidateSize(), 300);
+  }
+
+  function openFromMap(kind, id) {
+    if (kind === 'student') {
+      const ui = App.cached('ui:student-care') || App.remember('ui:student-care', { homeroomId: '', studentId: '', tab: 'student-family' });
+      ui.studentId = id;
+      location.hash = '#/student-care';
+      return;
+    }
+    App.pendingOpen = { entity: kind, id };
+    location.hash = '#/' + kind;
+  }
+
+  function stat(tone, title, value, icon, footIcon, foot) {
+    return `<article class="stat-card ${tone}"><small>${esc(title)}</small><strong>${App.num(value)}</strong>
+      <span class="stat-icon"><i class="fa-solid ${icon}"></i></span><p><i class="fa-solid ${footIcon}"></i> ${esc(foot)}</p></article>`;
+  }
+
+  function lineChart(points) {
+    const width = 420, height = 220, left = 40, bottom = 24, top = 10, right = 10;
+    const grid = [0, 20, 40, 60, 80, 100].map((value) => {
+      const y = top + (height - top - bottom) * (1 - value / 100);
+      return `<line x1="${left}" x2="${width - right}" y1="${y}" y2="${y}" stroke="#e5e9f0"/><text x="${left - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="#64748b">${value}%</text>`;
+    }).join('');
+    if (!points.length) return `<svg viewBox="0 0 ${width} ${height}">${grid}<text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#94a3b8" font-size="13">ยังไม่มีข้อมูลการเช็กชื่อ</text></svg>`;
+    const step = points.length > 1 ? (width - left - right) / (points.length - 1) : 0;
+    const xy = points.map((point, index) => [left + step * index + (points.length === 1 ? (width - left - right) / 2 : 0),
+      top + (height - top - bottom) * (1 - point.rate / 100)]);
+    const path = xy.map((p, index) => (index ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    const area = path + ` L ${xy[xy.length - 1][0]} ${height - bottom} L ${xy[0][0]} ${height - bottom} Z`;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="แนวโน้มอัตรามาเรียน">${grid}
+      <path d="${area}" fill="#e0f2fe"/><path d="${path}" fill="none" stroke="#0ea5e9" stroke-width="2.5"/>
+      ${xy.map((p, index) => `<circle cx="${p[0]}" cy="${p[1]}" r="3.5" fill="#0ea5e9"><title>${App.fmtDate(points[index].date)}: ${points[index].rate}%</title></circle>`).join('')}</svg>`;
+  }
+
+  function donutChart(parts, hole, total) {
+    const size = 220, r = 90, cx = size / 2, cy = size / 2;
+    const sum = parts.reduce((acc, part) => acc + part[1], 0);
+    let angle = -Math.PI / 2;
+    let slices = '';
+    if (!sum) slices = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#f1f5f9"/>`;
+    else parts.forEach(([name, value, color]) => {
+      if (!value) return;
+      const portion = value / sum;
+      if (portion >= 0.9999) { slices += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"><title>${name}: ${value}</title></circle>`; return; }
+      const end = angle + portion * Math.PI * 2;
+      const large = portion > 0.5 ? 1 : 0;
+      const x1 = cx + r * Math.cos(angle), y1 = cy + r * Math.sin(angle), x2 = cx + r * Math.cos(end), y2 = cy + r * Math.sin(end);
+      const mid = (angle + end) / 2;
+      slices += `<path d="M${cx} ${cy} L${x1} ${y1} A${r} ${r} 0 ${large} 1 ${x2} ${y2} Z" fill="${color}" stroke="#fff" stroke-width="2"><title>${name}: ${value}</title></path>`;
+      if (portion > 0.06) slices += `<text x="${cx + r * 0.72 * Math.cos(mid)}" y="${cy + r * 0.72 * Math.sin(mid) + 4}" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2937">${Math.round(portion * 100)}%</text>`;
+      angle = end;
+    });
+    const center = hole ? `<circle cx="${cx}" cy="${cy}" r="52" fill="#fff"/><text x="${cx}" y="${cy + 6}" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">${App.num(total)}</text>` : '';
+    return `<svg viewBox="0 0 ${size} ${size}" style="max-width:240px;margin:0 auto">${slices}${center}</svg>
+      <div class="legend">${parts.map(([name, value, color]) => `<span><i style="background:${color}"></i>${esc(name)} ${App.num(value)}</span>`).join('')}</div>`;
+  }
+
+  App.openSos = function openSos() {
+    const body = App.openModal('แจ้งเหตุด่วน SOS', `<form class="form-grid" novalidate>
+      <label class="wide">เหตุการณ์ <span class="c-rose">*</span><textarea name="message" maxlength="500" required placeholder="เช่น นักเรียนเป็นลมที่หน้าห้อง ม.2/1"></textarea>
+        <small class="field-error" data-error-for="message"></small></label>
+      <label class="wide">สถานที่<input name="location" maxlength="200" placeholder="เช่น อาคาร 2 ชั้น 1"></label>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="submit" class="danger-button"><i class="fa-solid fa-paper-plane"></i> ส่งแจ้งเหตุ</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const response = await App.call('sos.send', { message: form.elements.message.value, location: form.elements.location.value }, { quiet: true });
+      if (!response.ok) { App.showErrors(form, response.error); return; }
+      App.forget('dashboard');
+      const sent = (response.data.delivered || []).filter((item) => item.ok).map((item) => item.channel);
+      App.showEmergency('ส่งแจ้งเหตุแล้ว' + (sent.length ? ' และแจ้งเตือนผ่าน ' + sent.join(', ') : ' ผู้ดูแลระบบจะเห็นบนแดชบอร์ดทันที'));
+    });
+  };
+
+  // ---------- เบอร์โทรฉุกเฉิน (แสดงหลังส่ง SOS หรือกดดูจากการ์ด SOS) ----------
+  App.showEmergency = function showEmergency(sentMessage) {
+    const s = App.state.settings;
+    const contacts = (s.emergencyContacts || []).slice();
+    if (s.schoolPhone) contacts.push({ name: 'โทรศัพท์โรงเรียน', phone: s.schoolPhone });
+    const body = App.openModal('เบอร์โทรฉุกเฉิน', `
+      ${sentMessage ? `<div class="sent-banner"><i class="fa-solid fa-circle-check"></i> ${esc(sentMessage)}</div>` : ''}
+      <p class="muted">แตะที่เบอร์เพื่อโทรออกทันที (บนมือถือ)</p>
+      <div class="emergency-grid">${contacts.map((item) => `<a class="emergency-call" href="tel:${attr(String(item.phone).replace(/[^0-9+#]/g, ''))}">
+        <i class="fa-solid fa-phone"></i><span><strong>${esc(item.phone)}</strong><small>${esc(item.name)}</small></span></a>`).join('')
+        || '<p class="muted">ยังไม่ได้ตั้งค่าเบอร์ฉุกเฉิน (ผู้ดูแลระบบเพิ่มได้ที่หน้า “ตั้งค่าระบบ”)</p>'}</div>
+      <div class="form-actions"><button type="button" class="secondary-button" data-close>ปิด</button></div>`);
+    body.querySelector('[data-close]').addEventListener('click', App.closeModal);
+  };
+
+  // ---------- แอปทั้งหมด ----------
+  App.register('#/apps', () => {
+    const groups = App.state.groups.filter((group) => group.key !== 'top');
+    App.content(groups.map((group) => {
+      const items = App.state.modules.filter((module) => module.category === group.key);
+      if (!items.length) return '';
+      return `<section class="app-group"><h2><i class="fa-solid ${attr(group.icon)}"></i> ${esc(group.name)} <span class="badge">${items.length}</span></h2>
+        <div class="app-grid">${items.map((module) => `<a class="app-card" ${App.moduleLinkAttrs(module)}>
+          <span class="app-icon"><i class="fa-solid ${attr(module.icon)} c-${attr(module.color)}"></i></span><strong>${esc(module.name)}</strong></a>`).join('')}</div></section>`;
+    }).join(''));
+  });
+
+  // ---------- โปรไฟล์ของฉัน ----------
+  App.register('#/profile', async () => {
+    const response = await App.call('profile.get');
+    if (!response.ok) return App.renderError(response.error);
+    const { user, personnel, passwordMinLength } = response.data;
+    const rows = [['ชื่อผู้ใช้', user.username], ['ชื่อที่แสดง', user.displayName], ['อีเมล', user.email || '-'],
+      ['บทบาท', (user.roles || []).map((key) => App.ROLE_NAMES[key] || key).join(', ')]];
+    if (personnel) {
+      rows.push(['บุคลากร', App.personName(personnel.id)], ['ตำแหน่ง', App.label('positions', personnel.positionId) || '-'],
+        ['วิทยฐานะ', App.label('standings', personnel.standingId) || '-'], ['กลุ่มสาระฯ', App.label('subjectGroups', personnel.subjectGroupId) || '-'],
+        ['โทรศัพท์', personnel.phone || '-']);
+    }
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-id-badge c-sky"></i> ข้อมูลของฉัน</h2>
+      ${personnel ? '' : '<p>บัญชีนี้ยังไม่ได้เชื่อมกับทะเบียนบุคลากร (ผู้ดูแลระบบเชื่อมได้ที่หน้า “ผู้ใช้งาน”)</p>'}</div></div>
+      <table class="data-table">${rows.map(([name, value]) => `<tr><th style="width:30%">${esc(name)}</th><td>${esc(value)}</td></tr>`).join('')}</table></section>
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-key c-amber"></i> เปลี่ยนรหัสผ่าน</h2>
+        <p>รหัสผ่านใหม่ต้องมีอย่างน้อย ${passwordMinLength} ตัวอักษร และจะออกจากระบบในอุปกรณ์อื่นทั้งหมด</p></div></div>
+        <form id="password-form" class="form-grid" novalidate>
+          <label>รหัสผ่านปัจจุบัน<input name="currentPassword" type="password" autocomplete="current-password" required><small class="field-error" data-error-for="currentPassword"></small></label>
+          <label>รหัสผ่านใหม่<input name="newPassword" type="password" autocomplete="new-password" required><small class="field-error" data-error-for="newPassword"></small></label>
+          <div class="form-actions wide"><button class="primary-button" type="submit">เปลี่ยนรหัสผ่าน</button></div></form></section>`);
+    const form = document.getElementById('password-form');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const result = await App.call('auth.changePassword', Object.fromEntries(new FormData(form).entries()), { quiet: true });
+      if (!result.ok) { App.showErrors(form, result.error); App.toast(result.error.message, 'error'); return; }
+      form.reset(); App.toast('เปลี่ยนรหัสผ่านแล้ว', 'success');
+    });
+  });
+
+  // ---------- ตั้งค่าระบบ ----------
+  App.register('#/settings', () => {
+    const canEdit = App.can('settings.edit');
+    const shortcuts = [
+      ['#/school-profile', 'fa-school-flag', 'c-blue', 'หน้าแรกและข้อมูลโรงเรียน', 'ชื่อ ตรา ภาพปก ภาพบรรยากาศ วิสัยทัศน์ ติดต่อ', 'settings.view'],
+      ['#/menus', 'fa-toggle-on', 'c-green', 'จัดการเมนู', 'เปิด/ปิดเมนูที่โรงเรียนใช้ พร้อมชุดสำเร็จรูป', 'module.toggle'],
+      ['#/integrations', 'fa-plug', 'c-teal', 'เชื่อมต่อระบบภายนอก', 'เพิ่ม web app อื่นเป็นเมนูในระบบนี้', 'settings.view']
+    ].filter((item) => App.can(item[5]));
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-gear c-slate"></i> ตั้งค่าระบบ</h2>
+        <p>ธีมสี การสมัครสมาชิก เบอร์ฉุกเฉิน และการแจ้งเตือน</p></div></div>
+      <div class="app-grid">${shortcuts.map(([route, icon, color, name, hint]) => `<a class="app-card" href="${route}"><span class="app-icon"><i class="fa-solid ${icon} ${color}"></i></span>
+        <span><strong>${name}</strong><br><small class="muted">${hint}</small></span></a>`).join('')}</div></section>
+      ${canEdit ? themePanel() + registrationPanel() + emergencyPanel() + notifyPanel() + (App.can('module.toggle') ? demoPanel() : '') : '<section class="panel"><p class="muted">บัญชีนี้ดูได้อย่างเดียว</p></section>'}`);
+    if (canEdit) { bindThemePanel(); bindRegistrationPanel(); bindEmergencyPanel(); bindNotifyPanel(); if (App.can('module.toggle')) bindDemoPanel(); }
+  });
+
+  // ---------- ข้อมูลตัวอย่าง ----------
+  function demoPanel() {
+    return `<section class="panel" id="demo-panel"><div class="panel-head"><div><h2><i class="fa-solid fa-flask c-purple"></i> ข้อมูลตัวอย่างเพื่อทดสอบระบบ</h2>
+        <p>ครู นักเรียน ห้องเรียน ตารางสอน เช็กชื่อ คะแนน แผนการสอน และรูปภาพจำลอง (สมมติทั้งหมด) ล้างออกได้ก่อนใช้งานจริง โดยไม่กระทบข้อมูลที่กรอกเอง</p></div></div>
+      <p class="muted" data-demo-status>กำลังตรวจสอบ…</p>
+      <div class="form-actions"><button type="button" class="secondary-button" data-demo-load hidden><i class="fa-solid fa-download"></i> โหลดข้อมูลตัวอย่าง</button>
+        <button type="button" class="danger-button" data-demo-clear hidden><i class="fa-solid fa-trash"></i> ล้างข้อมูลตัวอย่าง</button></div>
+      <p class="muted"><small>หมายเหตุ: ข้อมูลหน้าแรก (ชื่อโรงเรียน รูปสไลด์ ข้อความ) ที่ระบบเติมให้ ให้แก้ที่เมนู “หน้าแรกและข้อมูลโรงเรียน”</small></p></section>`;
+  }
+
+  async function bindDemoPanel() {
+    const root = document.getElementById('demo-panel');
+    if (!root) return;
+    const line = root.querySelector('[data-demo-status]');
+    const loadButton = root.querySelector('[data-demo-load]');
+    const clearButton = root.querySelector('[data-demo-clear]');
+    const refresh = async () => {
+      const response = await App.call('demo.status', null, { silent: true, quiet: true });
+      if (!response.ok) { line.textContent = 'ตรวจสอบสถานะไม่ได้'; return; }
+      const info = response.data;
+      const loaded = info.counts.students > 0;
+      line.textContent = loaded ? 'มีข้อมูลตัวอย่างอยู่ในระบบ: บุคลากร ' + info.counts.personnel + ' คน, นักเรียน ' + info.counts.students + ' คน, รายวิชา ' + info.counts.courses + ' วิชา'
+        : info.pending ? 'กำลังสร้างข้อมูลตัวอย่าง (' + info.percent + '%)' : 'ยังไม่มีข้อมูลตัวอย่าง';
+      loadButton.hidden = loaded || info.pending; clearButton.hidden = !loaded;
+    };
+    loadButton.addEventListener('click', async () => {
+      if (!confirm('โหลดข้อมูลตัวอย่างทั้งระบบ? (ใช้เวลาประมาณ 3–6 นาที)')) return;
+      const started = await App.call('demo.load');
+      if (started.ok) App.runDemoLoad('demo.run', true, () => { App.toast('โหลดข้อมูลตัวอย่างเสร็จแล้ว', 'success'); setTimeout(() => location.reload(), 800); });
+    });
+    clearButton.addEventListener('click', async () => {
+      const answer = prompt('ข้อมูลตัวอย่างทั้งหมดจะถูกลบ (ข้อมูลที่คุณกรอกเองไม่ถูกลบ)\nพิมพ์คำว่า  ล้างข้อมูลตัวอย่าง  เพื่อยืนยัน');
+      if (answer === null) return;
+      const result = await App.call('demo.clear', { confirm: answer });
+      if (result.ok) { App.toast('ล้างข้อมูลตัวอย่างแล้ว ' + result.data.removed + ' แถว', 'success'); refresh(); }
+    });
+    refresh();
+  }
+
+
+  // ---------- ธีมสี 10 ชุด + กำหนดเอง ----------
+  function themePanel() {
+    const s = App.state.settings;
+    const themes = App.state.themes || [];
+    const current = s.themeKey || 'custom';
+    return `<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-palette c-pink"></i> ธีมและสี</h2>
+        <p>เลือกธีมสำเร็จรูป 10 ชุด หรือกำหนดสีเอง (มีผลกับทุกคนในโรงเรียน)</p></div></div>
+      <div class="theme-grid">${themes.map((theme) => `<button type="button" class="theme-option ${theme.key === current ? 'selected' : ''}" data-theme="${attr(theme.key)}">
+        <i class="fa-solid fa-circle-check check"></i><span class="swatch"><span style="background:${attr(theme.sidebarColor)}"></span><span style="background:${attr(theme.primaryColor)}"></span></span>
+        <strong>${esc(theme.name)}</strong></button>`).join('')}
+        <button type="button" class="theme-option ${current === 'custom' ? 'selected' : ''}" data-theme="custom"><i class="fa-solid fa-circle-check check"></i>
+          <span class="swatch"><span style="background:conic-gradient(red,orange,yellow,green,blue,violet,red)"></span><span style="background:#e2e8f0"></span></span><strong>กำหนดเอง</strong></button></div>
+      <div class="form-grid" style="margin-top:16px">
+        <label>สีหลัก (ปุ่ม ลิงก์ หัวข้อ)<input type="color" data-color="primaryColor" value="${attr(s.primaryColor || '#1e3a5f')}"></label>
+        <label>สีแถบเมนูและหน้าเข้าสู่ระบบ<input type="color" data-color="sidebarColor" value="${attr(s.sidebarColor || '#0f1b33')}"></label></div>
+      <div class="theme-preview" data-preview><div class="side"><strong>ตัวอย่างเมนู</strong><span>แดชบอร์ด</span><span data-active>รายการที่เลือก</span></div>
+        <div class="main"><button type="button" class="primary-button">ปุ่มหลัก</button> <span class="badge info">ป้าย</span></div></div>
+      <div class="form-actions"><button type="button" class="secondary-button" data-theme-reset>ยกเลิกการเปลี่ยนแปลง</button>
+        <button type="button" class="primary-button" data-theme-save><i class="fa-solid fa-floppy-disk"></i> บันทึกธีม</button></div></section>`;
+  }
+
+  function bindThemePanel() {
+    const root = document.getElementById('page-content');
+    const original = { primaryColor: App.state.settings.primaryColor, sidebarColor: App.state.settings.sidebarColor, themeKey: App.state.settings.themeKey };
+    const draft = Object.assign({}, original);
+    const inputs = { primaryColor: root.querySelector('[data-color=primaryColor]'), sidebarColor: root.querySelector('[data-color=sidebarColor]') };
+    const preview = () => {
+      App.applyTheme(draft.primaryColor, draft.sidebarColor);
+      const box = root.querySelector('[data-preview] .side');
+      box.style.background = draft.sidebarColor;
+      box.querySelector('[data-active]').style.background = 'color-mix(in srgb,' + draft.sidebarColor + ' 68%,' + draft.primaryColor + ')';
+      root.querySelectorAll('[data-theme]').forEach((button) => button.classList.toggle('selected', button.dataset.theme === (draft.themeKey || 'custom')));
+    };
+    root.querySelectorAll('[data-theme]').forEach((button) => button.addEventListener('click', () => {
+      const theme = (App.state.themes || []).find((item) => item.key === button.dataset.theme);
+      draft.themeKey = button.dataset.theme;
+      if (theme) { draft.primaryColor = theme.primaryColor; draft.sidebarColor = theme.sidebarColor; inputs.primaryColor.value = theme.primaryColor; inputs.sidebarColor.value = theme.sidebarColor; }
+      preview();
+    }));
+    Object.entries(inputs).forEach(([key, input]) => input.addEventListener('input', () => { draft[key] = input.value; draft.themeKey = 'custom'; preview(); }));
+    root.querySelector('[data-theme-reset]').addEventListener('click', () => {
+      Object.assign(draft, original); inputs.primaryColor.value = original.primaryColor || '#1e3a5f'; inputs.sidebarColor.value = original.sidebarColor || '#0f1b33'; preview();
+    });
+    root.querySelector('[data-theme-save]').addEventListener('click', async () => {
+      const response = await App.call('settings.update', Object.assign({}, App.state.settings, draft));
+      if (!response.ok) return;
+      App.applyBranding(response.data);
+      Object.assign(original, draft);
+      App.toast('บันทึกธีมแล้ว', 'success');
+    });
+    preview();
+  }
+
+  // ---------- การสมัครสมาชิก ----------
+  function registrationPanel() {
+    return `<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-user-plus c-green"></i> การสมัครสมาชิก</h2>
+      <p>เมื่อเปิด หน้าเข้าสู่ระบบจะมีปุ่ม “สมัครสมาชิก” ผู้สมัครต้องรอผู้ดูแลระบบอนุมัติที่หน้า “ผู้ใช้งาน” ก่อนจึงจะใช้งานได้</p></div></div>
+      <label class="check-row"><input type="checkbox" data-allow-register ${App.state.settings.allowSelfRegistration === true ? 'checked' : ''}> เปิดรับสมัครสมาชิก</label></section>`;
+  }
+
+  function bindRegistrationPanel() {
+    const box = document.querySelector('[data-allow-register]');
+    box.addEventListener('change', async () => {
+      const response = await App.call('settings.update', Object.assign({}, App.state.settings, { allowSelfRegistration: box.checked }));
+      if (!response.ok) { box.checked = !box.checked; return; }
+      App.applyBranding(response.data);
+      App.toast(box.checked ? 'เปิดรับสมัครสมาชิกแล้ว' : 'ปิดรับสมัครสมาชิกแล้ว', 'success');
+    });
+  }
+
+  // ---------- เบอร์โทรฉุกเฉิน ----------
+  function emergencyRow(item) {
+    return `<div class="toolbar" data-contact style="margin-bottom:8px">
+      <label class="grow">ชื่อหน่วยงาน<input data-name maxlength="80" value="${attr(item.name || '')}" placeholder="เช่น โรงพยาบาลประจำอำเภอ"></label>
+      <label>เบอร์โทร<input data-phone maxlength="20" inputmode="tel" value="${attr(item.phone || '')}" placeholder="เช่น 053-000000"></label>
+      <div class="actions"><button type="button" class="ghost-button danger" data-remove title="ลบ"><i class="fa-solid fa-trash"></i></button></div></div>`;
+  }
+
+  function emergencyPanel() {
+    const contacts = App.state.settings.emergencyContacts || [];
+    return `<section class="panel" id="emergency-panel"><div class="panel-head"><div><h2><i class="fa-solid fa-phone c-rose"></i> เบอร์โทรฉุกเฉิน</h2>
+      <p>แสดงเป็นหน้าต่างให้กดโทรได้ทันทีหลังครูกดส่ง SOS (เพิ่มเบอร์โรงพยาบาล สถานีตำรวจใกล้โรงเรียน หรือผู้บริหารได้)</p></div></div>
+      <div data-contacts>${contacts.map(emergencyRow).join('')}</div>
+      <p class="field-error" data-error-for="emergencyContacts"></p>
+      <div class="form-actions"><button type="button" class="secondary-button" data-add-contact><i class="fa-solid fa-plus"></i> เพิ่มเบอร์</button>
+        <button type="button" class="secondary-button" data-preview-contacts><i class="fa-regular fa-eye"></i> ดูตัวอย่าง</button>
+        <button type="button" class="primary-button" data-save-contacts><i class="fa-solid fa-floppy-disk"></i> บันทึกเบอร์ฉุกเฉิน</button></div></section>`;
+  }
+
+  function bindEmergencyPanel() {
+    const panel = document.getElementById('emergency-panel');
+    const list = panel.querySelector('[data-contacts]');
+    const bindRemove = () => list.querySelectorAll('[data-remove]').forEach((button) => { button.onclick = () => button.closest('[data-contact]').remove(); });
+    const collect = () => [...list.querySelectorAll('[data-contact]')].map((row) => ({ name: row.querySelector('[data-name]').value, phone: row.querySelector('[data-phone]').value }))
+      .filter((item) => item.name.trim() || item.phone.trim());
+    bindRemove();
+    panel.querySelector('[data-add-contact]').addEventListener('click', () => { list.insertAdjacentHTML('beforeend', emergencyRow({})); bindRemove(); });
+    panel.querySelector('[data-preview-contacts]').addEventListener('click', () => {
+      const saved = App.state.settings.emergencyContacts;
+      App.state.settings.emergencyContacts = collect();
+      App.showEmergency('');
+      App.state.settings.emergencyContacts = saved;
+    });
+    panel.querySelector('[data-save-contacts]').addEventListener('click', async () => {
+      const response = await App.call('settings.update', Object.assign({}, App.state.settings, { emergencyContacts: collect() }), { quiet: true });
+      if (!response.ok) { App.showErrors(panel, response.error); App.toast(response.error.message, 'error'); return; }
+      App.clearErrors(panel);
+      App.applyBranding(response.data);
+      App.toast('บันทึกเบอร์ฉุกเฉินแล้ว', 'success');
+    });
+  }
+
+  // ---------- แจ้งเตือน LINE / Telegram ----------
+  function notifyPanel() {
+    return `<section class="panel" id="notify-panel"><div class="panel-head"><div><h2><i class="fa-solid fa-bell c-amber"></i> แจ้งเตือนผ่าน LINE / Telegram</h2>
+      <p>แจ้ง ผอ. และผู้เกี่ยวข้องทันทีเมื่อมี SOS แจ้งเหตุ/จุดเสี่ยง ครูส่งแผน เยี่ยมบ้าน นักเรียนกลุ่มเสี่ยง ส่งต่อ หรือขอลา เลือกเรื่องที่ต้องการได้ โทเคนเก็บแบบลับในระบบ ไม่แสดงบนหน้าเว็บ</p></div></div><p class="muted">กำลังโหลด...</p></section>`;
+  }
+
+  function notifyCategory(category, c) {
+    const route = c.routes[category.key] || {};
+    const events = c.events.filter((item) => item.category === category.key);
+    return `<div class="notify-cat"><h4>${esc(category.name)}</h4>
+      ${events.map((item) => `<label class="check-row"><input type="checkbox" data-event="${attr(item.key)}" ${item.enabled ? 'checked' : ''}> ${esc(item.name)}</label>`).join('')}
+      <div class="notify-route">
+        <label>Telegram Chat ID ของกลุ่มนี้<input data-route="${attr(category.key)}" data-kind="telegramChatId" value="${attr(route.telegramChatId || '')}" placeholder="เว้นว่าง = กลุ่มหลัก">
+          <small class="field-error" data-error-for="route-${attr(category.key)}-telegram"></small></label>
+        <label>LINE ID ของกลุ่มนี้<input data-route="${attr(category.key)}" data-kind="lineTo" value="${attr(route.lineTo || '')}" placeholder="เว้นว่าง = กลุ่มหลัก">
+          <small class="field-error" data-error-for="route-${attr(category.key)}-line"></small></label></div></div>`;
+  }
+
+  async function bindNotifyPanel() {
+    const panel = document.getElementById('notify-panel');
+    const response = await App.call('notify.get', null, { silent: true });
+    if (!response.ok) { panel.querySelector('.muted').textContent = response.error.message; return; }
+    const c = response.data;
+    panel.querySelector('.muted').outerHTML = `<form class="form-grid" novalidate>
+      <fieldset class="wide" style="border:1px solid var(--slate-200);border-radius:12px;padding:14px">
+        <legend><i class="fa-brands fa-line c-green"></i> LINE (Messaging API)</legend>
+        <label class="check-row"><input type="checkbox" name="lineEnabled" ${c.lineEnabled ? 'checked' : ''}> เปิดใช้งาน LINE</label>
+        <div class="form-grid">
+          <label>Channel access token ${c.lineTokenSet ? '<span class="secret-set"><i class="fa-solid fa-check"></i> ตั้งไว้แล้ว</span>' : ''}
+            <input name="lineToken" type="password" autocomplete="off" placeholder="${c.lineTokenSet ? 'เว้นว่างเพื่อใช้ค่าเดิม' : 'วางโทเคนจาก LINE Developers'}"></label>
+          <label>ส่งถึง (User ID / Group ID)<input name="lineTo" value="${attr(c.lineTo)}" placeholder="U… หรือ C…"><small class="field-error" data-error-for="lineTo"></small></label>
+          ${c.lineTokenSet ? '<label class="check-row"><input type="checkbox" name="clearLineToken"> ลบโทเคน LINE</label>' : ''}</div>
+        <p class="muted">สร้าง Messaging API channel ที่ developers.line.biz → คัดลอก Channel access token และ User ID ของผู้รับ (หรือ Group ID หลังเชิญบอทเข้ากลุ่ม)</p>
+      </fieldset>
+      <fieldset class="wide" style="border:1px solid var(--slate-200);border-radius:12px;padding:14px">
+        <legend><i class="fa-brands fa-telegram c-sky"></i> Telegram</legend>
+        <label class="check-row"><input type="checkbox" name="telegramEnabled" ${c.telegramEnabled ? 'checked' : ''}> เปิดใช้งาน Telegram</label>
+        <div class="form-grid">
+          <label>Bot token ${c.telegramTokenSet ? '<span class="secret-set"><i class="fa-solid fa-check"></i> ตั้งไว้แล้ว</span>' : ''}
+            <input name="telegramToken" type="password" autocomplete="off" placeholder="${c.telegramTokenSet ? 'เว้นว่างเพื่อใช้ค่าเดิม' : '123456:ABC… จาก @BotFather'}"><small class="field-error" data-error-for="telegramToken"></small></label>
+          <label>Chat ID<input name="telegramChatId" value="${attr(c.telegramChatId)}" placeholder="-100… หรือ @ชื่อช่อง"><small class="field-error" data-error-for="telegramChatId"></small></label>
+          ${c.telegramTokenSet ? '<label class="check-row"><input type="checkbox" name="clearTelegramToken"> ลบโทเคน Telegram</label>' : ''}</div>
+        <p class="muted">สร้างบอทกับ @BotFather → เพิ่มบอทเข้ากลุ่มครู → ใช้ Chat ID ของกลุ่ม</p>
+      </fieldset>
+      <fieldset class="wide notify-events"><legend><i class="fa-solid fa-list-check c-green"></i> เรื่องที่ต้องการแจ้ง และกลุ่มที่รับข้อความ</legend>
+        <p class="muted">แต่ละหมวดส่งเข้ากลุ่มหลักด้านบน หรือกรอก Chat ID / LINE ID ของกลุ่มเฉพาะ (เช่น กลุ่มฝ่ายบุคคล กลุ่มความปลอดภัย) เว้นว่าง = ส่งกลุ่มหลัก</p>
+        ${c.categories.map((category) => notifyCategory(category, c)).join('')}
+        <label class="check-row"><input type="checkbox" name="studentNames" ${c.studentNames ? 'checked' : ''}> แสดงชื่อ-นามสกุลนักเรียนในข้อความ (ปิดไว้ = แสดงเฉพาะชื่อต้นและห้อง เพื่อคุ้มครองข้อมูลส่วนบุคคล)</label>
+      </fieldset>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-notify-test><i class="fa-solid fa-paper-plane"></i> ส่งข้อความทดสอบ</button>
+        <button type="submit" class="primary-button"><i class="fa-solid fa-floppy-disk"></i> บันทึกการแจ้งเตือน</button></div></form>`;
+    const form = panel.querySelector('form');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const f = form.elements;
+      const values = { lineEnabled: f.lineEnabled.checked, lineToken: f.lineToken.value, lineTo: f.lineTo.value,
+        clearLineToken: !!(f.clearLineToken && f.clearLineToken.checked), telegramEnabled: f.telegramEnabled.checked,
+        telegramToken: f.telegramToken.value, telegramChatId: f.telegramChatId.value,
+        clearTelegramToken: !!(f.clearTelegramToken && f.clearTelegramToken.checked), studentNames: f.studentNames.checked, events: {}, routes: {} };
+      form.querySelectorAll('[data-event]').forEach((input) => { values.events[input.dataset.event] = input.checked; });
+      form.querySelectorAll('[data-route]').forEach((input) => { (values.routes[input.dataset.route] ||= {})[input.dataset.kind] = input.value.trim(); });
+      const result = await App.call('notify.save', values, { quiet: true });
+      if (!result.ok) { App.showErrors(form, result.error); App.toast(result.error.message, 'error'); return; }
+      App.toast('บันทึกการแจ้งเตือนแล้ว', 'success');
+      bindNotifyPanel();
+    });
+    form.querySelector('[data-notify-test]').addEventListener('click', async () => {
+      const result = await App.call('notify.test');
+      if (!result.ok) return;
+      App.toast(result.data.results.map((item) => item.channel + ': ' + (item.ok ? 'สำเร็จ' : 'ไม่สำเร็จ (' + item.status + ') ' + (item.detail || ''))).join('\n'),
+        result.data.results.every((item) => item.ok) ? 'success' : 'error');
+    });
+  }
+
+  // ---------- ข้อมูลหลัก (แต่ละตารางเป็นหน้าของตัวเอง) และปีการศึกษา ----------
+  async function renderMaster(table, module) {
+    const isYear = table === 'academic-years';
+    const canEdit = App.can(isYear ? 'academicYear.edit' : 'master.edit');
+    let data = App.cached('master:' + table);
+    if (!data) {
+      const response = await App.call('master.list', { table });
+      if (!response.ok) return App.renderError(response.error);
+      data = App.remember('master:' + table, response.data);
+    }
+    const rerender = () => renderMaster(table, module);
+    const form = !canEdit ? '' : isYear
+      ? `<form id="master-form" class="toolbar" novalidate style="background:var(--slate-100);padding:14px;border-radius:12px">
+          <label>ปีการศึกษา<input name="year" inputmode="numeric" maxlength="4" placeholder="2569" required><small class="field-error" data-error-for="year"></small></label>
+          <label>ภาคเรียน<select name="term"><option value="1">1</option><option value="2">2</option></select><small class="field-error" data-error-for="term"></small></label>
+          <label>วันเริ่มต้น<input name="startsAt" type="date" required><small class="field-error" data-error-for="startsAt"></small></label>
+          <label>วันสิ้นสุด<input name="endsAt" type="date" required><small class="field-error" data-error-for="endsAt"></small></label>
+          <label class="check-row"><input name="isActive" type="checkbox"> ใช้งานปัจจุบัน</label>
+          <div class="actions"><button class="secondary-button hidden" type="button" id="master-cancel">ยกเลิก</button><button class="primary-button" type="submit"><i class="fa-solid fa-floppy-disk"></i> บันทึก</button></div>
+        </form>`
+      : `<form id="master-form" class="toolbar" novalidate style="background:var(--slate-100);padding:14px;border-radius:12px">
+          <label class="grow">เพิ่ม${esc(data.label)}<input name="name" maxlength="100" required><small class="field-error" data-error-for="name"></small></label>
+          <div class="actions"><button class="secondary-button hidden" type="button" id="master-cancel">ยกเลิก</button><button class="primary-button" type="submit"><i class="fa-solid fa-floppy-disk"></i> บันทึก</button></div>
+        </form>`;
+    const head = isYear ? '<th>ปีการศึกษา</th><th>ภาคเรียน</th><th>ช่วงเวลา</th><th>สถานะ</th>' : `<th>${esc(data.label)}</th>`;
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid ${attr(module.icon)} c-${attr(module.color)}"></i> ${esc(data.label)}</h2>
+      <p>ทั้งหมด ${data.rows.length} รายการ</p></div></div>${form}
+      <div class="table-wrap"><table class="data-table"><thead><tr><th class="num">#</th>${head}${canEdit ? '<th></th>' : ''}</tr></thead><tbody>
+      ${data.rows.length ? data.rows.map((row, index) => `<tr><td class="num">${index + 1}</td>
+        ${isYear ? `<td>${esc(row.year)}</td><td>${esc(row.term)}</td><td>${App.fmtDate(row.startsAt)} – ${App.fmtDate(row.endsAt)}</td>
+          <td>${row.isActive === true ? '<span class="badge success">ปัจจุบัน</span>' : ''}</td>` : `<td>${esc(row.name)}</td>`}
+        ${canEdit ? `<td class="actions"><button type="button" class="ghost-button" data-edit="${attr(row.id)}"><i class="fa-solid fa-pen"></i></button>
+          <button type="button" class="ghost-button danger" data-delete="${attr(row.id)}"><i class="fa-solid fa-trash"></i></button></td>` : ''}</tr>`).join('')
+        : '<tr><td colspan="6" class="empty-row">ยังไม่มีข้อมูล</td></tr>'}</tbody></table></div></section>`);
+    if (!canEdit) return;
+    const formNode = document.getElementById('master-form');
+    const cancel = document.getElementById('master-cancel');
+    let editing = null;
+    cancel.addEventListener('click', () => { editing = null; formNode.reset(); cancel.classList.add('hidden'); App.clearErrors(formNode); });
+    const afterSave = async () => { App.forget('master:' + table); await App.refreshLookups(); App.forget('entity:'); rerender(); };
+    formNode.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(formNode).entries());
+      if (isYear) values.isActive = formNode.elements.isActive.checked;
+      const saved = await App.call('master.save', { table, id: editing && editing.id, version: editing && editing.version, values }, { quiet: true });
+      if (!saved.ok) { App.showErrors(formNode, saved.error); if (!Object.keys(saved.error.fieldErrors || {}).length) App.toast(saved.error.message, 'error'); return; }
+      App.toast('บันทึกแล้ว', 'success');
+      if (isYear && values.isActive) App.state.yearId = saved.data.id;
+      await afterSave();
+    });
+    document.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => {
+      editing = data.rows.find((row) => String(row.id) === button.dataset.edit);
+      if (isYear) { ['year', 'term', 'startsAt', 'endsAt'].forEach((key) => { formNode.elements[key].value = editing[key] ?? ''; }); formNode.elements.isActive.checked = editing.isActive === true; }
+      else formNode.elements.name.value = editing.name;
+      cancel.classList.remove('hidden');
+      formNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }));
+    document.querySelectorAll('[data-delete]').forEach((button) => button.addEventListener('click', async () => {
+      const row = data.rows.find((item) => String(item.id) === button.dataset.delete);
+      if (!row || !confirm('ยืนยันการลบรายการนี้?')) return;
+      const removed = await App.call('master.delete', { table, id: row.id, version: row.version });
+      if (!removed.ok) return;
+      App.toast('ลบแล้ว', 'success');
+      await afterSave();
+    }));
+  }
+
+  App.register('#/academic-years', (module) => renderMaster('academic-years', module));
+  const MASTER_ROUTES = { 'master-subject-groups': 'subject-groups', 'master-divisions': 'divisions', 'master-positions': 'positions',
+    'master-personnel-types': 'personnel-types', 'master-titles': 'titles', 'master-standings': 'standings' };
+  Object.entries(MASTER_ROUTES).forEach(([key, table]) => App.register('#/' + key, (module) => renderMaster(table, module)));
+})();
+</script>

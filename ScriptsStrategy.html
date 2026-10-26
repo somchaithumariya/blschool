@@ -1,0 +1,579 @@
+<script>
+/**
+ * แผนกลยุทธ์ (SWOT) ส่วนที่ 2: TOWS Matrix · วิสัยทัศน์ → พันธกิจ → เป้าประสงค์ → กลยุทธ์ (AI ร่างทีละขั้น ยืนยันก่อนไปต่อ + ตรวจความเชื่อมโยง)
+ * · โครงการตามกลยุทธ์ (มาตรฐาน ประเด็นหลัก/รอง, AI เสนอโครงการ, แผนปฏิบัติการ) · รายงานผลโครงการ (AI เรียบเรียง, เล่มรายงาน, สรุปผลทุกโครงการ)
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const esc = App.esc;
+  const attr = App.attr;
+  const TOWS = [['SO', 'กลยุทธ์เชิงรุก', 'จุดแข็ง + โอกาส'], ['ST', 'กลยุทธ์เชิงป้องกัน', 'จุดแข็ง + อุปสรรค'],
+    ['WO', 'กลยุทธ์เชิงแก้ไข', 'จุดอ่อน + โอกาส'], ['WT', 'กลยุทธ์เชิงรับ', 'จุดอ่อน + อุปสรรค']];
+  const STAGE_ICON = { vision: 'fa-eye', mission: 'fa-bullseye', goal: 'fa-flag-checkered', strategy: 'fa-chess-rook' };
+  const STAGE_HELP = {
+    vision: 'ภาพอนาคตของโรงเรียนในประโยคเดียว มีกรอบเวลา และสะท้อนกลยุทธ์ TOWS ที่ยืนยันแล้ว',
+    mission: 'สิ่งที่โรงเรียนต้องทำเพื่อให้วิสัยทัศน์เป็นจริง ขึ้นต้นด้วยคำกริยา',
+    goal: 'ผลลัพธ์ที่ต้องการของแต่ละพันธกิจ พร้อมตัวชี้วัดและค่าเป้าหมาย (ทุกพันธกิจต้องมีเป้าประสงค์)',
+    strategy: 'วิธีการที่จะไปถึงเป้าประสงค์ อ้างกลยุทธ์ TOWS ที่เป็นที่มา (ทุกเป้าประสงค์ต้องมีกลยุทธ์)'
+  };
+  const towsOf = (code) => String(code || '').replace(/\d+$/, '');
+  const chip = (code) => App.factorBadge(code);
+  const shortStd = (name) => String(name || '').replace(/^(มาตรฐานที่ \d).*$/, '$1');
+  const money = (value) => Number(value || 0).toLocaleString('th-TH');
+
+  async function loadPage(yearId) {
+    const response = await App.call('strategy.page', { academicYearId: yearId });
+    if (response.ok) App.state.qaStandards = response.data.standards;
+    return response;
+  }
+  const byLevel = (d, level) => d.items.filter((item) => item.level === level);
+  const stageOf = (d, key) => d.stages.find((stage) => stage.key === key) || {};
+  const confirmedBadge = (stage) => stage.confirmed ? `<span class="badge success"><i class="fa-solid fa-check"></i> ยืนยันแล้ว</span>` : '<span class="badge warning">ร่าง</span>';
+
+  async function confirmStage(yearId, stage, yes) {
+    if (!yes && !(window.confirm('ยกเลิกการยืนยันขั้นนี้เพื่อแก้ไข?'))) return;
+    const result = await App.call('strategy.confirm', { academicYearId: yearId, stage, confirmed: yes });
+    if (!result.ok) return;
+    App.toast(yes ? 'ยืนยันแล้ว' : 'ยกเลิกการยืนยันแล้ว แก้ไขได้', 'success');
+    App.route();
+  }
+
+  // ---------- TOWS Matrix ----------
+  App.register('#/tows', async () => {
+    const yearId = App.yearIdOrActive();
+    const response = await loadPage(yearId);
+    if (!response.ok) return App.renderError(response.error);
+    const d = response.data;
+    const stage = stageOf(d, 'tows');
+    const items = byLevel(d, 'tows');
+    const ai = d.canManage ? await App.aiStatus() : {};
+    const factors = (d.analysis && d.analysis.factors) || { S: [], W: [], O: [], T: [] };
+    const list = (rows) => rows.length ? `<ol class="st-flist">${rows.map((item) => `<li><b>${esc(item.code)}</b> ${esc(item.issue)}${item.count ? ` <small class="muted">${item.average}</small>` : ''}</li>`).join('')}</ol>` : '<p class="muted">—</p>';
+    const cell = (type) => {
+      const own = items.filter((item) => towsOf(item.code) === type);
+      const meta = TOWS.find((entry) => entry[0] === type);
+      const focus = d.analysis && d.analysis.quadrant.focus === type;
+      return `<div class="st-cell t-${type}${focus ? ' focus' : ''}"><h3>${chip(type)} ${esc(meta[1])} <small>${esc(meta[2])}</small>${focus ? ' <span class="badge purple">ตำแหน่งในกราฟแนะนำ</span>' : ''}</h3>
+        ${own.length ? `<ol>${own.map((item) => `<li><b>${esc(item.code)}</b> ${esc(item.text)} ${item.sourceCodes.length ? `<span class="st-src">${item.sourceCodes.map(chip).join('')}</span>` : ''}</li>`).join('')}</ol>` : '<p class="muted">ยังไม่มี</p>'}</div>`;
+    };
+    App.content(`${App.strategySteps('tows')}
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-chess-knight c-sky"></i> กลยุทธ์ TOWS Matrix ${confirmedBadge(stage)}</h2>
+        <p>จับคู่ปัจจัยภายใน (S, W) กับปัจจัยภายนอก (O, T) เป็นกลยุทธ์ 4 แบบ${d.analysis && d.analysis.quadrant.focus ? ` · โรงเรียนอยู่ช่อง <b>${esc(d.analysis.quadrant.name)}</b> ควรเน้น ${chip(d.analysis.quadrant.focus)}` : ''}</p></div>
+        <div class="actions no-print"><label>ปีการศึกษา<select data-year>${App.yearOptions(yearId)}</select></label>
+          ${d.canManage && !stage.confirmed ? `<button type="button" class="secondary-button" data-ai ${ai.swot ? '' : 'disabled title="ต้องใส่ API key ของ AI SWOT และแผนกลยุทธ์"'}><i class="fa-solid fa-wand-magic-sparkles"></i> AI ร่าง TOWS</button>
+            <button type="button" class="secondary-button" data-edit><i class="fa-solid fa-pen"></i> แก้ไข</button>
+            <button type="button" class="primary-button" data-confirm ${items.length ? '' : 'disabled'}><i class="fa-solid fa-check"></i> ยืนยัน TOWS</button>` : ''}
+          ${d.canManage && stage.confirmed ? '<button type="button" class="secondary-button" data-unconfirm><i class="fa-solid fa-lock-open"></i> ยกเลิกการยืนยันเพื่อแก้ไข</button>' : ''}</div></div>
+        <div class="st-tows">
+          <div class="st-corner">${d.analysis ? App.swotChart(d.analysis) : ''}</div>
+          <div class="st-axis f-O"><h4>โอกาส (O)</h4>${list(factors.O)}</div><div class="st-axis f-T"><h4>อุปสรรค (T)</h4>${list(factors.T)}</div>
+          <div class="st-axis f-S"><h4>จุดแข็ง (S)</h4>${list(factors.S)}</div>${cell('SO')}${cell('ST')}
+          <div class="st-axis f-W"><h4>จุดอ่อน (W)</h4>${list(factors.W)}</div>${cell('WO')}${cell('WT')}
+        </div>
+        ${stage.confirmed ? `<p class="muted"><i class="fa-solid fa-circle-check c-green"></i> ยืนยันโดย ${esc(stage.by)} เมื่อ ${App.fmtDateTime(stage.at)} — ขั้นต่อไป: <a href="#/school-direction">วิสัยทัศน์ พันธกิจ กลยุทธ์</a></p>` : ''}
+        ${d.analysis && d.analysis.needs.length ? `<details class="st-needs-mini"><summary>ความต้องการจำเป็นที่ใช้ประกอบ (${d.analysis.needs.length} อันดับแรก)</summary>
+          <ol>${d.analysis.needs.map((item) => `<li><b>${esc(item.code)}</b> ${esc(item.item)} <span class="badge ${item.level === 'สูงมาก' ? 'danger' : item.level === 'สูง' ? 'warning' : 'info'}">PNI ${item.pni}</span></li>`).join('')}</ol></details>` : ''}
+      </section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; App.route(); });
+    const on = (selector, handler) => { const node = root.querySelector(selector); if (node) node.addEventListener('click', handler); };
+    on('[data-edit]', () => openEditor(d, 'tows', items));
+    on('[data-confirm]', () => confirmStage(yearId, 'tows', true));
+    on('[data-unconfirm]', () => confirmStage(yearId, 'tows', false));
+    on('[data-ai]', () => aiDraft(d, 'tows'));
+  });
+
+  // ---------- วิสัยทัศน์ → พันธกิจ → เป้าประสงค์ → กลยุทธ์ ----------
+  App.register('#/school-direction', async () => {
+    const yearId = App.yearIdOrActive();
+    const response = await loadPage(yearId);
+    if (!response.ok) return App.renderError(response.error);
+    const d = response.data;
+    const ai = d.canManage ? await App.aiStatus() : {};
+    const find = (id) => d.items.find((item) => item.id === id);
+    const missionsOf = (strategy) => [...new Set(strategy.parentIds.map(find).filter(Boolean).flatMap((goal) => goal.parentIds))];
+    const projectCount = (id) => d.projects.filter((project) => project.strategyId === id && project.status !== 'ยกเลิก').length;
+    const stages = ['vision', 'mission', 'goal', 'strategy'];
+    const rail = `<ol class="st-rail">${d.stages.map((stage) => `<li class="${stage.confirmed ? 'done' : ''}"><a href="${stage.key === 'tows' ? '#/tows' : '#st-' + stage.key}">
+      <i class="fa-solid ${stage.confirmed ? 'fa-circle-check' : 'fa-circle'}"></i> ${esc(stage.name)} <small>${stage.count}</small></a></li>`).join('')}</ol>`;
+    const itemHtml = (level, item) => {
+      if (level === 'vision') return `<blockquote class="st-vision">${esc(item.text)}</blockquote>`;
+      const links = level === 'goal' ? item.parentIds.map((id) => find(id)).filter(Boolean).map((row) => `<span class="chip">รองรับ ${esc(row.code)}</span>`).join('')
+        : level === 'strategy' ? item.parentIds.map((id) => find(id)).filter(Boolean).map((row) => `<span class="chip">${esc(row.code)}</span>`).join('') +
+          missionsOf(item).map((id) => find(id)).filter(Boolean).map((row) => `<span class="chip st-mission-chip">${esc(row.code)}</span>`).join('') + item.sourceCodes.map(chip).join('') : '';
+      const standards = item.standards.map((name) => `<span class="chip">${esc(shortStd(name))}</span>`).join('');
+      return `<li><div><b>${esc(item.code)}</b> ${esc(item.text)}</div>
+        ${item.kpi || item.target ? `<div class="st-kpi"><i class="fa-solid fa-gauge"></i> ${esc(item.kpi || '')}${item.target ? ` · เป้าหมาย <b>${esc(item.target)}</b>` : ''}</div>` : ''}
+        ${links || standards ? `<div class="chip-list">${links}${standards}</div>` : ''}
+        ${level === 'strategy' ? `<div class="muted"><small><i class="fa-solid fa-diagram-project"></i> โครงการ ${projectCount(item.id)} โครงการ</small></div>` : ''}</li>`;
+    };
+    const section = (level) => {
+      const stage = stageOf(d, level);
+      const prev = d.stages[d.stages.findIndex((item) => item.key === level) - 1];
+      const ready = !prev || prev.confirmed;
+      const rows = byLevel(d, level);
+      return `<section class="panel st-stage" id="st-${level}"><div class="panel-head"><div><h2><i class="fa-solid ${STAGE_ICON[level]} c-blue"></i> ${esc(stage.name)} ${confirmedBadge(stage)}</h2>
+          <p>${esc(STAGE_HELP[level])}</p></div>
+        ${d.canManage ? `<div class="actions no-print">${!ready ? `<span class="muted">ยืนยันขั้น${esc(prev.name)}ก่อน</span>` : stage.confirmed
+          ? `<button type="button" class="secondary-button" data-unconfirm="${level}"><i class="fa-solid fa-lock-open"></i> ยกเลิกการยืนยัน</button>`
+          : `<button type="button" class="secondary-button" data-ai="${level}" ${ai.swot ? '' : 'disabled title="ต้องใส่ API key ของ AI SWOT และแผนกลยุทธ์"'}><i class="fa-solid fa-wand-magic-sparkles"></i> AI ร่าง</button>
+            <button type="button" class="secondary-button" data-edit="${level}"><i class="fa-solid fa-pen"></i> ${rows.length ? 'แก้ไข' : 'เขียนเอง'}</button>
+            <button type="button" class="primary-button" data-confirm="${level}" ${rows.length ? '' : 'disabled'}><i class="fa-solid fa-check"></i> ยืนยัน</button>`}</div>` : ''}</div>
+        ${rows.length ? (level === 'vision' ? itemHtml(level, rows[0]) : `<ol class="st-items">${rows.map((item) => itemHtml(level, item)).join('')}</ol>`)
+          : `<p class="muted">${ready ? 'ยังไม่มี กด “AI ร่าง” ให้ AI เสนอจากขั้นก่อนหน้า หรือ “เขียนเอง”' : 'รอขั้นก่อนหน้า'}</p>`}</section>`;
+    };
+    const missions = byLevel(d, 'mission');
+    const strategies = byLevel(d, 'strategy');
+    const matrix = missions.length && strategies.length ? `<section class="panel"><h2><i class="fa-solid fa-table-cells c-teal"></i> ความสอดคล้องของกลยุทธ์กับพันธกิจ</h2>
+      <div class="table-wrap"><table class="data-table st-matrix"><thead><tr><th>กลยุทธ์</th>${missions.map((mission) => `<th class="center" title="${attr(mission.text)}">${esc(mission.code)}</th>`).join('')}<th class="num">โครงการ</th></tr></thead>
+      <tbody>${strategies.map((strategy) => { const linked = missionsOf(strategy); return `<tr><td><b>${esc(strategy.code)}</b> ${esc(strategy.text)}</td>
+        ${missions.map((mission) => `<td class="center">${linked.includes(mission.id) ? '<i class="fa-solid fa-circle c-green" aria-label="สอดคล้อง"></i>' : ''}</td>`).join('')}<td class="num">${projectCount(strategy.id)}</td></tr>`; }).join('')}</tbody></table></div></section>` : '';
+    const checks = `<section class="panel st-checks"><h2><i class="fa-solid fa-stethoscope c-rose"></i> ตรวจความเชื่อมโยงของแผน</h2>
+      <ul>${d.checks.map((check) => `<li class="${check.ok ? 'ok' : 'warn'}"><i class="fa-solid ${check.ok ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i> ${esc(check.text)}
+        ${check.detail.length ? `<small>${esc(check.detail.slice(0, 12).join(' · '))}${check.detail.length > 12 ? ' …' : ''}</small>` : ''}</li>`).join('')}</ul></section>`;
+    App.content(`${App.strategySteps('school-direction')}
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-compass c-blue"></i> วิสัยทัศน์ พันธกิจ เป้าประสงค์ และกลยุทธ์</h2>
+        <p>ทำทีละขั้น ขั้นที่ยืนยันแล้วเป็นฐานให้ AI ร่างขั้นถัดไป</p></div>
+        <div class="actions no-print"><label>ปีการศึกษา<select data-year>${App.yearOptions(yearId)}</select></label>
+          <button type="button" class="secondary-button" data-print><i class="fa-solid fa-print"></i> พิมพ์แผนกลยุทธ์</button>
+          ${d.canPublish ? '<button type="button" class="secondary-button" data-publish><i class="fa-solid fa-globe"></i> เผยแพร่ขึ้นหน้าแรก</button>' : ''}</div></div>${rail}</section>
+      ${stages.map(section).join('')}${matrix}${checks}`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; App.route(); });
+    root.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => openEditor(d, button.dataset.edit, byLevel(d, button.dataset.edit))));
+    root.querySelectorAll('[data-ai]').forEach((button) => button.addEventListener('click', () => aiDraft(d, button.dataset.ai)));
+    root.querySelectorAll('[data-confirm]').forEach((button) => button.addEventListener('click', () => confirmStage(yearId, button.dataset.confirm, true)));
+    root.querySelectorAll('[data-unconfirm]').forEach((button) => button.addEventListener('click', () => confirmStage(yearId, button.dataset.unconfirm, false)));
+    root.querySelector('[data-print]').addEventListener('click', () => printPlan(d));
+    const publish = root.querySelector('[data-publish]');
+    if (publish) publish.addEventListener('click', async () => {
+      if (!(window.confirm('นำวิสัยทัศน์ พันธกิจ และเป้าประสงค์ที่ยืนยันแล้วไปแสดงบนหน้าแรกของเว็บโรงเรียน (แทนข้อความเดิม)?'))) return;
+      const result = await App.call('strategy.publish', { academicYearId: yearId });
+      if (result.ok) App.toast('เผยแพร่ขึ้นหน้าแรกแล้ว', 'success');
+    });
+  });
+
+  // ---------- ตัวแก้ไขรายการของขั้น ----------
+  function rowHtml(d, stage, item, index) {
+    const checks = (name, options, chosen) => `<div class="st-checks-inline">${options.map(([value, label]) =>
+      `<label class="check-row"><input type="checkbox" data-${name} value="${attr(value)}" ${chosen.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</div>`;
+    const standards = d.standards.map((standard) => [standard.name, esc(shortStd(standard.name))]);
+    let extra = '';
+    if (stage === 'tows') {
+      extra = `<label>ประเภท<select data-type>${TOWS.map(([type, name]) => `<option value="${type}" ${item.type === type || towsOf(item.code) === type ? 'selected' : ''}>${type} ${esc(name)}</option>`).join('')}</select></label>
+        <label>รหัสประเด็นที่จับคู่ (คั่นด้วย ,)<input type="text" data-sources value="${attr((item.sourceCodes || []).join(','))}" placeholder="เช่น S1,O2,N3"></label>`;
+    } else if (stage === 'mission') {
+      extra = `<div><small>มาตรฐานที่เกี่ยวข้อง</small>${checks('std', standards, item.standards || [])}</div>`;
+    } else if (stage === 'goal') {
+      extra = `<div><small>รองรับพันธกิจ</small>${checks('parent', byLevel(d, 'mission').map((row) => [row.id, esc(row.code)]), item.parentIds || [])}</div>
+        <label>ตัวชี้วัด<input type="text" data-kpi maxlength="1000" value="${attr(item.kpi || '')}"></label>
+        <label>ค่าเป้าหมาย<input type="text" data-target maxlength="500" value="${attr(item.target || '')}" placeholder="เช่น ร้อยละ 80"></label>`;
+    } else if (stage === 'strategy') {
+      extra = `<div><small>รองรับเป้าประสงค์</small>${checks('parent', byLevel(d, 'goal').map((row) => [row.id, esc(row.code)]), item.parentIds || [])}</div>
+        <div><small>ที่มาจาก TOWS</small>${checks('tows', byLevel(d, 'tows').map((row) => [row.code, chip(row.code)]), item.sourceCodes || [])}</div>
+        <div><small>มาตรฐานที่เกี่ยวข้อง</small>${checks('std', standards, item.standards || [])}</div>`;
+    }
+    return `<div class="st-edit-row" data-row="${index}" data-id="${attr(item.id || '')}">
+      <textarea data-text rows="${stage === 'vision' ? 3 : 2}" maxlength="1000" aria-label="ข้อความ">${esc(item.text || '')}</textarea>
+      <div class="st-edit-extra">${extra}</div>
+      ${stage === 'vision' ? '' : '<button type="button" class="ghost-button danger" data-remove title="ลบข้อนี้"><i class="fa-solid fa-trash"></i></button>'}</div>`;
+  }
+
+  function openEditor(d, stage, items) {
+    const name = (d.stages.find((item) => item.key === stage) || {}).name || stage;
+    let rows = items.length ? items.map((item) => Object.assign({}, item)) : [{ text: '' }];
+    const body = App.openModal('แก้ไข' + name, `<form class="st-editor" novalidate><p class="muted" style="margin-top:0">${esc(STAGE_HELP[stage] || 'จับคู่ปัจจัยแล้วเขียนกลยุทธ์ขึ้นต้นด้วยคำกริยา อ้างรหัสประเด็น เช่น S1, O2 หรือความต้องการจำเป็น N3')}</p>
+      <div data-rows></div>${stage === 'vision' ? '' : '<button type="button" class="secondary-button" data-add><i class="fa-solid fa-plus"></i> เพิ่มข้อ</button>'}
+      <p class="form-error" data-form-error></p>
+      <div class="form-actions"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="submit" class="primary-button"><i class="fa-solid fa-floppy-disk"></i> บันทึก</button></div></form>`);
+    const host = body.querySelector('[data-rows]');
+    const collect = () => [...host.querySelectorAll('[data-row]')].map((row) => {
+      const pick = (name) => [...row.querySelectorAll(`[data-${name}]:checked`)].map((input) => input.value);
+      const item = { id: row.dataset.id || '', text: row.querySelector('[data-text]').value };
+      if (stage === 'tows') { item.type = row.querySelector('[data-type]').value; item.sourceCodes = row.querySelector('[data-sources]').value.split(/[,\s]+/).filter(Boolean); }
+      if (stage === 'goal') { item.parentIds = pick('parent'); item.kpi = row.querySelector('[data-kpi]').value; item.target = row.querySelector('[data-target]').value; }
+      if (stage === 'strategy') { item.parentIds = pick('parent'); item.sourceCodes = pick('tows'); item.standards = pick('std'); }
+      if (stage === 'mission') item.standards = pick('std');
+      return item;
+    });
+    const paint = () => { host.innerHTML = rows.map((item, index) => rowHtml(d, stage, item, index)).join(''); };
+    paint();
+    host.addEventListener('click', (event) => {
+      const remove = event.target.closest('[data-remove]');
+      if (!remove) return;
+      rows = collect();
+      rows.splice(Number(remove.closest('[data-row]').dataset.row), 1);
+      paint();
+    });
+    const add = body.querySelector('[data-add]');
+    if (add) add.addEventListener('click', () => { rows = collect(); rows.push({ text: '', type: 'SO' }); paint(); host.lastElementChild.querySelector('[data-text]').focus(); });
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    body.querySelector('form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const items2 = collect().filter((item) => item.text.trim());
+      const saved = await App.call('strategy.saveItems', { academicYearId: d.academicYearId, stage, items: items2 }, { silent: true, quiet: true });
+      if (!saved.ok) {
+        const fields = saved.error.fieldErrors || {};
+        const first = Object.keys(fields)[0];
+        body.querySelector('[data-form-error]').textContent = App.messageOf(saved.error) + (first ? ' — ข้อที่ ' + (Number(first.split('.')[1]) + 1) + ': ' + fields[first] : '');
+        return;
+      }
+      App.closeModal();
+      App.toast('บันทึกแล้ว ' + saved.data.count + ' ข้อ กด “ยืนยัน” เมื่อพร้อมไปขั้นต่อไป', 'success');
+      if (stage === 'strategy') await App.refreshLookups();
+      await App.route();
+    });
+    return body;
+  }
+
+  // AI ร่าง: แสดงร่างให้เลือก แล้วเปิดตัวแก้ไข (ยังไม่บันทึกจนกว่าผู้ใช้กดบันทึก)
+  async function aiDraft(d, stage) {
+    const body = App.openModal('AI ร่าง' + ((d.stages.find((item) => item.key === stage) || {}).name || ''), `<label>ข้อเสนอเพิ่มเติมถึง AI (ไม่บังคับ)
+        <input type="text" data-hint maxlength="500" placeholder="เช่น เน้นการอ่าน เทคโนโลยี และการมีส่วนร่วมของชุมชน"></label>
+      <div class="form-actions"><button type="button" class="primary-button" data-go><i class="fa-solid fa-wand-magic-sparkles"></i> ให้ AI ร่าง</button></div><div data-out></div>`);
+    body.querySelector('[data-go]').addEventListener('click', async (event) => {
+      event.currentTarget.disabled = true;
+      const out = body.querySelector('[data-out]');
+      out.innerHTML = '<p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> AI กำลังร่างจากข้อมูลที่ยืนยันแล้ว อาจใช้เวลา 10–60 วินาที…</p>';
+      const response = await App.call('strategy.aiDraft', { academicYearId: d.academicYearId, stage, hint: body.querySelector('[data-hint]').value }, { silent: true, quiet: true });
+      if (!body.isConnected) return;
+      if (!response.ok) { out.innerHTML = `<p class="form-error">${esc(App.messageOf(response.error))}</p>`; event.target.disabled = false; return; }
+      const items = response.data.items;
+      if (!items.length) { out.innerHTML = '<p class="form-error">AI ไม่ได้เสนอรายการที่ใช้ได้ ลองใหม่อีกครั้ง</p>'; return; }
+      const single = stage === 'vision';
+      out.innerHTML = `<p class="muted">${single ? 'เลือกวิสัยทัศน์ 1 ข้อ แล้วแก้ข้อความได้ในขั้นถัดไป' : 'เลือกข้อที่ต้องการใช้ (แทนรายการเดิมของขั้นนี้) แล้วแก้ไขได้ในขั้นถัดไป'}</p>
+        <div class="st-review">${items.map((item, index) => `<label class="st-review-row"><input type="${single ? 'radio' : 'checkbox'}" name="pick" value="${index}" ${single ? (index ? '' : 'checked') : 'checked'}>
+          <span>${item.type ? chip(item.type) + ' ' : ''}${esc(item.text)}${item.sourceCodes && item.sourceCodes.length ? ' ' + item.sourceCodes.map(chip).join('') : ''}
+          ${item.reason ? `<small class="muted">${esc(item.reason)}</small>` : ''}${item.kpi ? `<small class="muted">ตัวชี้วัด: ${esc(item.kpi)} · ${esc(item.target || '')}</small>` : ''}</span></label>`).join('')}</div>
+        <div class="form-actions"><button type="button" class="primary-button" data-use><i class="fa-solid fa-arrow-right"></i> ใช้ข้อที่เลือก</button></div>`;
+      out.querySelector('[data-use]').addEventListener('click', () => {
+        const chosen = [...out.querySelectorAll('[name=pick]:checked')].map((input) => items[Number(input.value)]);
+        if (!chosen.length) return App.toast('กรุณาเลือกอย่างน้อย 1 ข้อ', 'error');
+        const current = byLevel(d, stage);
+        // ใช้รหัสเดิมตามลำดับ เพื่อให้โครงการที่ผูกกลยุทธ์เดิมไม่หลุด
+        openEditor(d, stage, chosen.map((item, index) => Object.assign({}, item, { id: current[index] ? current[index].id : '' })));
+      });
+    });
+  }
+
+  // ---------- พิมพ์แผนกลยุทธ์ฉบับสมบูรณ์ ----------
+  function printPlan(d) {
+    const find = (id) => d.items.find((item) => item.id === id);
+    const a = d.analysis;
+    const section = (title, html) => `<h3>${title}</h3>${html}`;
+    const items = (level) => byLevel(d, level);
+    const swot = a ? `<table><tr><th style="width:50%">จุดแข็ง (S)</th><th>จุดอ่อน (W)</th></tr><tr><td>${(a.factors.S || []).map((i) => `${esc(i.code)} ${esc(i.issue)}`).join('<br>')}</td>
+      <td>${(a.factors.W || []).map((i) => `${esc(i.code)} ${esc(i.issue)}`).join('<br>')}</td></tr><tr><th>โอกาส (O)</th><th>อุปสรรค (T)</th></tr>
+      <tr><td>${(a.factors.O || []).map((i) => `${esc(i.code)} ${esc(i.issue)}`).join('<br>')}</td><td>${(a.factors.T || []).map((i) => `${esc(i.code)} ${esc(i.issue)}`).join('<br>')}</td></tr></table>
+      <div style="display:flex;gap:16px;align-items:center"><div style="width:260px">${App.swotChart(a)}</div><p>ตำแหน่งของโรงเรียน (${a.x}, ${a.y}) อยู่ในช่อง <b>${esc(a.quadrant.name)}</b><br>${esc(a.quadrant.strategy)}<br>ผู้ตอบแบบสอบถาม ${a.respondentCount} คน</p></div>` : '<p class="muted">-</p>';
+    const needs = a && a.needs.length ? `<table><tr><th>ลำดับ</th><th>ประเด็น</th><th>ประเด็นมาตรฐาน</th><th>D</th><th>I</th><th>PNI</th><th>ระดับ</th></tr>
+      ${a.needs.map((item) => `<tr><td class="center">${item.rank}</td><td>${esc(item.item)}</td><td>${esc(item.subIssue || item.mainIssue)}</td><td>${item.d}</td><td>${item.i}</td><td>${item.pni}</td><td>${esc(item.level)}</td></tr>`).join('')}</table>` : '<p class="muted">-</p>';
+    const tows = `<table><tr>${['SO', 'ST'].map((type) => `<th style="width:50%">${esc(TOWS.find((e) => e[0] === type)[1])} (${type})</th>`).join('')}</tr>
+      <tr>${['SO', 'ST'].map((type) => `<td>${items('tows').filter((i) => towsOf(i.code) === type).map((i) => `${esc(i.code)} ${esc(i.text)}`).join('<br>')}</td>`).join('')}</tr>
+      <tr>${['WO', 'WT'].map((type) => `<th>${esc(TOWS.find((e) => e[0] === type)[1])} (${type})</th>`).join('')}</tr>
+      <tr>${['WO', 'WT'].map((type) => `<td>${items('tows').filter((i) => towsOf(i.code) === type).map((i) => `${esc(i.code)} ${esc(i.text)}`).join('<br>')}</td>`).join('')}</tr></table>`;
+    const listOf = (level) => items(level).length ? `<ol>${items(level).map((i) => `<li>${esc(i.text)}${i.kpi ? `<br><small>ตัวชี้วัด: ${esc(i.kpi)}${i.target ? ' · ค่าเป้าหมาย ' + esc(i.target) : ''}</small>` : ''}</li>`).join('')}</ol>` : '<p class="muted">-</p>';
+    const strategies = items('strategy').map((strategy) => {
+      const goals = strategy.parentIds.map(find).filter(Boolean);
+      const projects = d.projects.filter((project) => project.strategyId === strategy.id && project.status !== 'ยกเลิก');
+      return `<tr><td><b>${esc(strategy.code)}</b> ${esc(strategy.text)}<br><small>TOWS: ${esc(strategy.sourceCodes.join(', ') || '-')}</small></td>
+        <td>${goals.map((goal) => esc(goal.code)).join(', ')}</td><td>${projects.map((project) => `${esc(project.code || '')} ${esc(project.name)}<br><small>${esc(shortStd(project.standard))} ประเด็น ${esc(project.mainIssues.join(', '))}${project.subIssues.length ? ' (' + esc(project.subIssues.join(', ')) + ')' : ''} · ${money(project.budget)} บาท</small>`).join('<br>') || '-'}</td></tr>`;
+    }).join('');
+    App.printHtml('แผนกลยุทธ์', `<h2 class="center">แผนกลยุทธ์และแผนปฏิบัติการ</h2><p class="center">${esc(App.state.settings.schoolName || '')} ปีการศึกษา ${esc(App.label('academicYears', d.academicYearId))}</p>
+      ${section('1. ผลการวิเคราะห์สภาพแวดล้อม (SWOT)', swot)}${section('2. ความต้องการจำเป็น (Needs Assessment)', needs)}${section('3. กลยุทธ์ TOWS Matrix', tows)}
+      ${section('4. วิสัยทัศน์', `<p>${esc((items('vision')[0] || {}).text || '-')}</p>`)}${section('5. พันธกิจ', listOf('mission'))}${section('6. เป้าประสงค์', listOf('goal'))}
+      ${section('7. กลยุทธ์และโครงการ', `<table><tr><th style="width:38%">กลยุทธ์</th><th style="width:12%">เป้าประสงค์</th><th>โครงการ (มาตรฐาน · ประเด็นหลัก/รอง · งบประมาณ)</th></tr>${strategies}</table>`)}
+      <p>งบประมาณรวม ${money(d.projects.filter((p) => p.status !== 'ยกเลิก').reduce((sum, p) => sum + p.budget, 0))} บาท</p>
+      <div class="sign"><div>ลงชื่อ ....................................<br>ผู้รับผิดชอบแผน</div><div>ลงชื่อ ....................................<br>(${esc(App.state.settings.directorName || '....................................')})<br>ผู้อำนวยการโรงเรียน</div></div>`);
+  }
+
+  // ---------- โครงการตามกลยุทธ์ ----------
+  function issueTree(form) {
+    const standards = App.state.qaStandards || [];
+    const mainInput = form.elements.mainIssues;
+    const subInput = form.elements.subIssues;
+    const chosen = new Set(String(subInput.value || '').split(',').concat(String(mainInput.value || '').split(',')).filter(Boolean));
+    [mainInput, subInput].forEach((input) => { input.type = 'hidden'; });
+    const field = mainInput.closest('label');
+    const wrap = document.createElement('div');
+    wrap.className = 'wide st-aud-field';
+    wrap.innerHTML = '<span>ประเด็นหลักและประเด็นรองของมาตรฐานที่โครงการตอบ</span><div class="st-tree" data-tree></div>';
+    field.replaceWith(wrap);
+    wrap.appendChild(mainInput);
+    const subLabel = subInput.closest('label');
+    wrap.appendChild(subInput);
+    if (subLabel) subLabel.remove();
+    const tree = wrap.querySelector('[data-tree]');
+    const sync = () => {
+      const mains = [...tree.querySelectorAll('[data-main]:checked')].map((input) => input.value);
+      const subs = [...tree.querySelectorAll('[data-sub]:checked')].map((input) => input.value);
+      mainInput.value = mains.join(',');
+      subInput.value = subs.join(',');
+    };
+    const paint = () => {
+      const standard = standards.find((item) => item.name === form.elements.standard.value);
+      tree.innerHTML = standard ? standard.issues.map((issue) => `<div class="st-tree-main"><label class="check-row"><input type="checkbox" data-main value="${attr(issue.code)}" ${chosen.has(issue.code) ? 'checked' : ''}> <b>${esc(issue.code)}</b> ${esc(issue.name)}</label>
+        ${issue.subs.map((sub) => `<label class="check-row st-tree-sub"><input type="checkbox" data-sub value="${attr(sub.code)}" ${chosen.has(sub.code) ? 'checked' : ''}> ${esc(sub.code)} ${esc(sub.name)}</label>`).join('')}</div>`).join('')
+        : '<p class="muted">เลือกมาตรฐานก่อน</p>';
+      sync();
+    };
+    tree.addEventListener('change', (event) => {
+      if (event.target.dataset.sub !== undefined && event.target.checked) {
+        const main = tree.querySelector(`[data-main][value="${CSS.escape(event.target.value.split('.').slice(0, 2).join('.'))}"]`);
+        if (main) main.checked = true;
+      }
+      sync();
+    });
+    form.elements.standard.addEventListener('change', () => { chosen.clear(); paint(); });
+    paint();
+  }
+
+  function peoplePicker(form, key, label) {
+    const hidden = form.elements[key];
+    const chosen = new Set(String(hidden.value || '').split(',').filter(Boolean));
+    hidden.type = 'hidden';
+    const field = hidden.closest('label');
+    const wrap = document.createElement('div');
+    wrap.className = 'wide plc-members-field';
+    while (field.firstChild) wrap.appendChild(field.firstChild);
+    field.replaceWith(wrap);
+    const picker = document.createElement('div');
+    picker.className = 'plc-members';
+    picker.innerHTML = `<input type="search" placeholder="ค้นหาชื่อบุคลากร" aria-label="${attr(label)}"><small class="muted" data-count></small><div class="plc-member-list" data-list></div>`;
+    hidden.after(picker);
+    const people = App.lookupList('personnel');
+    const paint = (text) => {
+      const q = String(text || '').trim();
+      picker.querySelector('[data-list]').innerHTML = people.filter((person) => !q || person.label.includes(q) || chosen.has(String(person.id))).slice(0, 80)
+        .map((person) => `<label class="check-row"><input type="checkbox" value="${attr(person.id)}" ${chosen.has(String(person.id)) ? 'checked' : ''}> ${esc(person.label)}</label>`).join('');
+      picker.querySelector('[data-count]').textContent = chosen.size ? `เลือกแล้ว ${chosen.size} คน` : '';
+    };
+    paint('');
+    picker.querySelector('input[type=search]').addEventListener('input', (event) => paint(event.target.value));
+    picker.addEventListener('change', (event) => {
+      if (event.target.type !== 'checkbox') return;
+      if (event.target.checked) chosen.add(event.target.value); else chosen.delete(event.target.value);
+      hidden.value = [...chosen].join(',');
+      picker.querySelector('[data-count]').textContent = chosen.size ? `เลือกแล้ว ${chosen.size} คน` : '';
+    });
+  }
+
+  App.entityDefaults['projects'] = () => ({ academicYearId: App.state.yearId, responsibleId: (App.state.user && App.state.user.personnelId) || '', status: 'เสนอโครงการ' });
+  App.entityFormReady['projects'] = async (form) => {
+    await App.ensureQaStandards();
+    issueTree(form);
+    peoplePicker(form, 'teamIds', 'ผู้ร่วมรับผิดชอบ');
+    if (!App.lookupList('strategies').some((item) => String(item.academicYearId) === String(App.state.yearId))) {
+      const note = document.createElement('p');
+      note.className = 'notice wide';
+      note.innerHTML = 'ปีการศึกษานี้ยังไม่มีกลยุทธ์ — กำหนดได้ที่เมนู <a href="#/school-direction">วิสัยทัศน์ พันธกิจ กลยุทธ์</a>';
+      form.prepend(note);
+    }
+    if (!App.can('swot.edit')) {
+      const status = form.elements.status;
+      [...status.options].forEach((option) => { if (['อนุมัติ', 'ยกเลิก'].includes(option.value) && option.value !== status.value) option.disabled = true; });
+    }
+  };
+
+  async function projectRows(yearId) {
+    const response = await App.call('entity.list', { entity: 'projects', academicYearId: yearId }, { silent: true, quiet: true });
+    return response.ok ? response.data.rows : [];
+  }
+
+  App.entityAfter['projects'] = async (container, rows) => {
+    const canPlan = App.can('swot.edit');
+    const ai = canPlan ? await App.aiStatus() : {};
+    const strategies = App.lookupList('strategies').filter((item) => String(item.academicYearId) === String(App.state.yearId));
+    const live = rows.filter((row) => row.status !== 'ยกเลิก');
+    const budget = live.reduce((sum, row) => sum + (Number(row.budget) || 0), 0);
+    const top = App.strategyTop('projects', `<section class="panel st-tools"><div>
+        <p>โครงการ ${live.length} โครงการ · งบประมาณรวม <b>${money(budget)}</b> บาท · ทุกโครงการผูกกลยุทธ์ มาตรฐาน ประเด็นหลัก และประเด็นรอง กด “ส่งผู้บริหาร” ในแถวเพื่อขออนุมัติ (ลงนาม = อนุมัติ)</p>
+        <div class="st-bystrategy">${strategies.map((strategy) => { const own = live.filter((row) => row.strategyId === strategy.id);
+          return `<span class="chip">${esc(strategy.label.slice(0, 48))}${strategy.label.length > 48 ? '…' : ''} <b>${own.length}</b></span>`; }).join('') || '<span class="muted">ยังไม่มีกลยุทธ์ในปีนี้</span>'}</div></div>
+      <div class="actions">${canPlan ? `<button type="button" class="secondary-button" data-ai ${ai.swot && strategies.length ? '' : 'disabled'}><i class="fa-solid fa-wand-magic-sparkles"></i> AI เสนอโครงการ</button>` : ''}
+        <button type="button" class="secondary-button" data-plan><i class="fa-solid fa-print"></i> พิมพ์แผนปฏิบัติการ</button></div></section>`);
+    if (!top) return;
+    top.querySelector('[data-plan]').addEventListener('click', () => printActionPlan(rows, strategies));
+    const aiButton = top.querySelector('[data-ai]');
+    if (aiButton) aiButton.addEventListener('click', () => aiProjects(strategies));
+  };
+
+  function printActionPlan(rows, strategies) {
+    const live = rows.filter((row) => row.status !== 'ยกเลิก');
+    const groups = strategies.map((strategy) => ({ strategy, rows: live.filter((row) => row.strategyId === strategy.id) }));
+    App.printHtml('แผนปฏิบัติการประจำปี', `<h2 class="center">แผนปฏิบัติการประจำปีการศึกษา ${esc(App.label('academicYears', App.state.yearId))}</h2>
+      <p class="center">${esc(App.state.settings.schoolName || '')}</p>
+      <table><thead><tr><th>ที่</th><th>โครงการ</th><th>มาตรฐาน / ประเด็นหลัก / ประเด็นรอง</th><th>ผู้รับผิดชอบ</th><th>ระยะเวลา</th><th class="right">งบประมาณ (บาท)</th><th>สถานะ</th></tr></thead><tbody>
+      ${groups.map((group) => `<tr><th colspan="7" style="text-align:left">${esc(group.strategy.label)}</th></tr>${group.rows.map((row, index) => `<tr><td class="center">${index + 1}</td>
+        <td>${esc(row.code || '')} ${esc(row.name)}</td><td>${esc(shortStd(row.standard))}<br><small>${esc(row.mainIssues || '-')}${row.subIssues ? ' / ' + esc(row.subIssues) : ''}</small></td>
+        <td>${esc(App.label('personnel', row.responsibleId))}</td><td><small>${App.fmtDate(row.startDate)} – ${App.fmtDate(row.endDate)}</small></td>
+        <td class="right">${money(row.budget)}</td><td>${esc(row.status)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">ยังไม่มีโครงการ</td></tr>'}`).join('')}
+      <tr><th colspan="5" class="right">รวม</th><th class="right">${money(live.reduce((sum, row) => sum + (Number(row.budget) || 0), 0))}</th><th></th></tr></tbody></table>`);
+  }
+
+  async function aiProjects(strategies) {
+    const own = (App.state.user && App.state.user.personnelId) || '';
+    const body = App.openModal('AI เสนอโครงการตามกลยุทธ์', `<label>กลยุทธ์<select data-strategy><option value="">ทุกกลยุทธ์</option>${strategies.map((item) => `<option value="${attr(item.id)}">${esc(item.label)}</option>`).join('')}</select></label>
+      <label>ข้อเสนอเพิ่มเติมถึง AI (ไม่บังคับ)<input type="text" data-hint maxlength="500" placeholder="เช่น งบประมาณรวมไม่เกิน 150,000 บาท เน้นการอ่าน"></label>
+      <div class="form-actions"><button type="button" class="primary-button" data-go><i class="fa-solid fa-wand-magic-sparkles"></i> ให้ AI เสนอ</button></div><div data-out></div>`);
+    body.querySelector('[data-go]').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      const out = body.querySelector('[data-out]');
+      out.innerHTML = '<p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> AI กำลังออกแบบโครงการจากกลยุทธ์และความต้องการจำเป็น อาจใช้เวลา 20–90 วินาที…</p>';
+      const response = await App.call('strategy.aiDraft', { academicYearId: App.state.yearId, stage: 'projects', strategyId: body.querySelector('[data-strategy]').value,
+        hint: body.querySelector('[data-hint]').value }, { silent: true, quiet: true });
+      button.disabled = false;
+      if (!body.isConnected) return;
+      if (!response.ok) { out.innerHTML = `<p class="form-error">${esc(App.messageOf(response.error))}</p>`; return; }
+      const items = response.data.items;
+      out.innerHTML = `<p class="muted">เลือกโครงการและผู้รับผิดชอบ แล้วกด “เพิ่มโครงการที่เลือก” (สถานะ “เสนอโครงการ” แก้รายละเอียดต่อได้ในตาราง)</p>
+        <div class="st-review">${items.map((item, index) => `<div class="st-review-row"><input type="checkbox" data-pick="${index}" checked aria-label="เลือก ${attr(item.name)}">
+          <span><b>${esc(item.name)}</b><small class="muted">${esc(App.label('strategies', item.strategyId))}</small>
+          <small>${esc(shortStd(item.standard))} · ประเด็นหลัก ${esc(item.mainIssues || '-')}${item.subIssues ? ' · ประเด็นรอง ' + esc(item.subIssues) : ''} · ${money(item.budget)} บาท</small>
+          <small class="muted">${esc(String(item.objectives).slice(0, 200))}</small>
+          <label>ผู้รับผิดชอบ<select data-owner="${index}">${App.options('personnel', own)}</select></label></span></div>`).join('')}</div>
+        <p class="form-error" data-error></p>
+        <div class="form-actions"><button type="button" class="primary-button" data-save><i class="fa-solid fa-plus"></i> เพิ่มโครงการที่เลือก</button></div>`;
+      out.querySelector('[data-save]').addEventListener('click', async () => {
+        const chosen = items.map((item, index) => Object.assign({}, item, { responsibleId: out.querySelector(`[data-owner="${index}"]`).value, on: out.querySelector(`[data-pick="${index}"]`).checked }))
+          .filter((item) => item.on).map((item) => { const copy = Object.assign({}, item); delete copy.on; return copy; });
+        if (chosen.some((item) => !item.responsibleId)) { out.querySelector('[data-error]').textContent = 'กรุณาเลือกผู้รับผิดชอบให้ครบทุกโครงการที่เลือก'; return; }
+        const saved = await App.call('strategy.createProjects', { academicYearId: App.state.yearId, items: chosen });
+        if (!saved.ok) return;
+        if (saved.data.errors.length) out.querySelector('[data-error]').textContent = 'เพิ่มไม่ได้ ' + saved.data.errors.length + ' โครงการ: ' + saved.data.errors.map((error) => error.name + ' (' + error.message + ')').join(', ');
+        App.toast('เพิ่มแล้ว ' + saved.data.created + ' โครงการ', 'success');
+        await App.refreshLookups();
+        App.reloadEntity('projects');
+        if (!saved.data.errors.length) { App.closeModal(); App.route(); }
+      });
+    });
+  }
+
+  function printProject(row) {
+    const text = (key) => esc(row[key] || '-');
+    App.printHtml('โครงการ', `<h2 class="center">โครงการ ${esc(row.name)}</h2><p class="center">${esc(App.state.settings.schoolName || '')} ปีการศึกษา ${esc(App.label('academicYears', row.academicYearId))}</p>
+      <table><tr><th style="width:28%">กลยุทธ์</th><td>${esc(App.label('strategies', row.strategyId))}</td></tr>
+        <tr><th>สนองมาตรฐาน</th><td>${text('standard')}<br>ประเด็นหลัก ${text('mainIssues')} · ประเด็นรอง ${text('subIssues')}</td></tr>
+        <tr><th>ลักษณะงาน / ฝ่าย</th><td>${text('department')}</td></tr><tr><th>ผู้รับผิดชอบ</th><td>${esc(App.label('personnel', row.responsibleId))}
+          ${row.teamIds ? '<br><small>ร่วมกับ ' + esc(String(row.teamIds).split(',').map((id) => App.label('personnel', id)).join(', ')) + '</small>' : ''}</td></tr>
+        <tr><th>ระยะเวลา</th><td>${App.fmtDate(row.startDate)} – ${App.fmtDate(row.endDate)}</td></tr></table>
+      ${[['1. หลักการและเหตุผล', 'rationale'], ['2. วัตถุประสงค์', 'objectives'], ['3. เป้าหมายเชิงปริมาณ', 'targetQuantity'], ['4. เป้าหมายเชิงคุณภาพ', 'targetQuality'],
+        ['5. กิจกรรมและขั้นตอนดำเนินงาน', 'activities'], ['7. ตัวชี้วัดความสำเร็จและวิธีประเมิน', 'kpi'], ['8. ผลที่คาดว่าจะได้รับ', 'expected']]
+        .map(([title, key]) => `<h3>${title}</h3><p class="pre">${text(key)}</p>`).join('').replace('<h3>7.', `<h3>6. งบประมาณ</h3><p>${money(row.budget)} บาท (${text('budgetSource')})</p><h3>7.`)}
+      <div class="sign"><div>ลงชื่อ ....................................<br>(${esc(App.label('personnel', row.responsibleId))})<br>ผู้เสนอโครงการ</div>
+        <div>ลงชื่อ ....................................<br>(${esc(App.state.settings.directorName || '....................................')})<br>ผู้อนุมัติโครงการ</div></div>`);
+  }
+  App.entityActions['projects'] = (App.entityActions['projects'] || []).concat([{ label: 'พิมพ์', icon: 'fa-print', permission: 'project.view', handler: printProject }]);
+
+  // ---------- รายงานผลโครงการ ----------
+  App.entityDefaults['project-reports'] = () => ({ academicYearId: App.state.yearId, reporterId: (App.state.user && App.state.user.personnelId) || '', reportDate: App.todayIso() });
+  App.entityFormReady['project-reports'] = async (form, row) => {
+    const projects = await projectRows(App.state.yearId);
+    const own = String((App.state.user && App.state.user.personnelId) || '');
+    const mine = App.can('swot.edit') ? projects : projects.filter((project) => project.responsibleId === own || String(project.teamIds || '').split(',').includes(own));
+    const select = form.elements.projectId;
+    const current = select.value;
+    select.innerHTML = '<option value="">— เลือกโครงการ —</option>' + mine.map((project) => `<option value="${attr(project.id)}" ${project.id === current ? 'selected' : ''}>${esc((project.code ? project.code + ' ' : '') + project.name)}</option>`).join('');
+    const box = document.createElement('div');
+    box.className = 'wide st-target';
+    select.closest('label').after(box);
+    const paint = () => {
+      const project = projects.find((item) => item.id === select.value);
+      box.innerHTML = project ? `<b>เป้าหมายของโครงการ</b><div class="st-target-grid"><div><small>เชิงปริมาณ</small><p>${esc(project.targetQuantity || '-')}</p></div>
+        <div><small>เชิงคุณภาพ</small><p>${esc(project.targetQuality || '-')}</p></div><div><small>งบประมาณที่ตั้งไว้</small><p>${money(project.budget)} บาท</p></div></div>` : '';
+    };
+    select.addEventListener('change', paint);
+    paint();
+    const ai = await App.aiStatus();
+    const polish = document.createElement('div');
+    polish.className = 'wide tl-ai';
+    polish.innerHTML = `<div class="tl-ai-head"><span class="tl-ai-mark"><i class="fa-solid fa-feather"></i></span><div><strong>ให้ AI ช่วยเรียบเรียงรายงาน</strong>
+      <small>พิมพ์สั้น ๆ ตามที่ทำจริง แล้วกดปุ่ม AI จะเรียบเรียงเป็นภาษาราชการเฉพาะช่องที่มีข้อความ ไม่เพิ่มข้อเท็จจริง (ตรวจทานก่อนบันทึก)</small></div></div>
+      <div class="tl-ai-actions"><button type="button" class="secondary-button" data-polish ${ai.swot || ai.bot ? '' : 'disabled'}><i class="fa-solid fa-wand-magic-sparkles"></i> เรียบเรียงข้อความ</button></div>`;
+    form.elements.activitiesDone.closest('label').before(polish);
+    polish.querySelector('[data-polish]').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      const values = {};
+      ['activitiesDone', 'quantResult', 'qualResult', 'outcome', 'problems', 'suggestions'].forEach((key) => { values[key] = form.elements[key].value; });
+      button.disabled = true;
+      const result = await App.call('project.polish', { values, projectId: select.value }, { silent: true });
+      button.disabled = false;
+      if (!result.ok) return;
+      Object.entries(result.data.values).forEach(([key, text]) => { if (form.elements[key]) form.elements[key].value = text; });
+      App.toast('เรียบเรียงแล้ว ' + Object.keys(result.data.values).length + ' ช่อง กรุณาตรวจทาน', 'success');
+    });
+  };
+
+  async function imageData(fileId) {
+    if (!fileId) return '';
+    const response = await App.call('file.get', { fileId }, { silent: true, quiet: true });
+    return response.ok && /^image\//.test(response.data.mimeType) ? `data:${response.data.mimeType};base64,${response.data.base64}` : '';
+  }
+
+  async function printReport(row) {
+    App.setLoading(true);
+    const projects = await projectRows(row.academicYearId);
+    const photos = (await Promise.all(['photo1FileId', 'photo2FileId', 'photo3FileId', 'photo4FileId'].map((key) => imageData(row[key])))).filter(Boolean);
+    App.setLoading(false);
+    const project = projects.find((item) => item.id === row.projectId) || {};
+    const text = (value) => esc(value || '-');
+    const used = Number(row.budgetUsed) || 0;
+    const planned = Number(project.budget) || 0;
+    App.printHtml('รายงานผลโครงการ', `<div class="center" style="padding:90px 0 60px"><h1 style="font-size:30px">รายงานผลการดำเนินโครงการ</h1><h2>${text(project.name)}</h2>
+        <p style="margin-top:60px">${esc(App.state.settings.schoolName || '')}<br>ปีการศึกษา ${esc(App.label('academicYears', row.academicYearId))}</p>
+        <p style="margin-top:40px">ผู้รายงาน ${esc(App.label('personnel', row.reporterId))}</p></div>
+      <div style="page-break-before:always"></div><h2 class="center">รายงานผลการดำเนินโครงการ</h2>
+      <table><tr><th style="width:28%">โครงการ</th><td>${text(project.name)}</td></tr><tr><th>กลยุทธ์</th><td>${esc(App.label('strategies', project.strategyId) || '-')}</td></tr>
+        <tr><th>สนองมาตรฐาน</th><td>${text(project.standard)}<br>ประเด็นหลัก ${text(project.mainIssues)} · ประเด็นรอง ${text(project.subIssues)}</td></tr>
+        <tr><th>ผู้รับผิดชอบ</th><td>${esc(App.label('personnel', project.responsibleId) || '-')}</td></tr><tr><th>วันที่รายงาน</th><td>${App.fmtDate(row.reportDate)}</td></tr></table>
+      <h3>1. วัตถุประสงค์</h3><p class="pre">${text(project.objectives)}</p>
+      <h3>2. กิจกรรมที่ดำเนินการ</h3><p class="pre">${text(row.activitiesDone)}</p>
+      <h3>3. ผลการดำเนินงานเทียบกับเป้าหมาย</h3>
+      <table><tr><th>เป้าหมาย</th><th>ที่ตั้งไว้</th><th>ผลที่ได้จริง</th><th>ผล</th></tr>
+        <tr><td>เชิงปริมาณ</td><td class="pre">${text(project.targetQuantity)}</td><td class="pre">${text(row.quantResult)}</td><td>${text(row.quantStatus)}</td></tr>
+        <tr><td>เชิงคุณภาพ</td><td class="pre">${text(project.targetQuality)}</td><td class="pre">${text(row.qualResult)}</td><td>${text(row.qualStatus)}</td></tr></table>
+      <p><b>สรุปผลการดำเนินงาน: ${text(row.result)}</b>${row.participants ? ` · ผู้เข้าร่วม ${esc(row.participants)} คน` : ''}${row.satisfaction ? ` · ความพึงพอใจเฉลี่ย ${esc(row.satisfaction)} จาก 5` : ''}</p>
+      <h3>4. การใช้งบประมาณ</h3><table><tr><th>งบประมาณที่ตั้งไว้</th><th>ใช้จริง</th><th>คงเหลือ</th><th>ร้อยละที่ใช้</th></tr>
+        <tr><td class="right">${money(planned)}</td><td class="right">${money(used)}</td><td class="right">${money(planned - used)}</td><td class="right">${planned ? (used * 100 / planned).toFixed(2) : '-'}</td></tr></table>
+      <h3>5. ผลที่เกิดกับผู้เรียน ครู และโรงเรียน</h3><p class="pre">${text(row.outcome)}</p>
+      <h3>6. ปัญหาและอุปสรรค</h3><p class="pre">${text(row.problems)}</p><h3>7. ข้อเสนอแนะและแนวทางพัฒนา</h3><p class="pre">${text(row.suggestions)}</p>
+      <div class="sign"><div>ลงชื่อ ....................................<br>(${esc(App.label('personnel', row.reporterId))})<br>ผู้รายงาน</div>
+        <div>ลงชื่อ ....................................<br>(${esc(App.state.settings.directorName || '....................................')})<br>ผู้อำนวยการโรงเรียน</div></div>
+      ${photos.length ? `<div style="page-break-before:always"></div><h3 class="center">ภาคผนวก ภาพกิจกรรม</h3><div class="photos">${photos.map((src) => `<img src="${attr(src)}" alt="ภาพกิจกรรม" style="max-width:48%">`).join('')}</div>` : ''}`);
+  }
+  App.entityActions['project-reports'] = (App.entityActions['project-reports'] || []).concat([{ label: 'พิมพ์เล่มรายงาน', icon: 'fa-book', permission: 'project.view', handler: printReport }]);
+
+  App.entityAfter['project-reports'] = async (container, rows) => {
+    const projects = await projectRows(App.state.yearId);
+    const live = projects.filter((row) => row.status !== 'ยกเลิก');
+    const reported = new Set(rows.map((row) => row.projectId));
+    const count = (result) => rows.filter((row) => row.result === result).length;
+    const planned = live.reduce((sum, row) => sum + (Number(row.budget) || 0), 0);
+    const used = rows.reduce((sum, row) => sum + (Number(row.budgetUsed) || 0), 0);
+    const waiting = live.filter((row) => !reported.has(row.id) && row.status !== 'เสนอโครงการ');
+    const top = App.strategyTop('project-reports', `<section class="panel st-tools"><div>
+        <div class="stat-grid compact st-mini">${App.statCard('sky', 'รายงานแล้ว', `${rows.length}/${live.length}`, 'fa-file-contract', 'โครงการที่ยังไม่ยกเลิก')}
+          ${App.statCard('green', 'บรรลุเป้าหมาย', count('บรรลุเป้าหมาย'), 'fa-bullseye', 'บางส่วน ' + count('บรรลุเป้าหมายบางส่วน') + ' · ไม่บรรลุ ' + count('ไม่บรรลุเป้าหมาย'))}
+          ${App.statCard('amber', 'ใช้งบประมาณ', money(used), 'fa-coins', 'จากที่ตั้งไว้ ' + money(planned) + ' บาท')}</div>
+        ${waiting.length ? `<p class="muted">ยังไม่รายงาน: ${waiting.slice(0, 10).map((row) => esc(row.name)).join(' · ')}${waiting.length > 10 ? ' …' : ''}</p>` : ''}</div>
+      <div class="actions"><button type="button" class="secondary-button" data-summary><i class="fa-solid fa-print"></i> พิมพ์สรุปผลทุกโครงการ</button></div></section>`);
+    if (!top) return;
+    top.querySelector('[data-summary]').addEventListener('click', () => {
+      const strategies = App.lookupList('strategies').filter((item) => String(item.academicYearId) === String(App.state.yearId));
+      const reportOf = (id) => rows.find((row) => row.projectId === id);
+      App.printHtml('สรุปผลการดำเนินโครงการ', `<h2 class="center">สรุปผลการดำเนินงานตามแผนปฏิบัติการ ปีการศึกษา ${esc(App.label('academicYears', App.state.yearId))}</h2>
+        <p class="center">${esc(App.state.settings.schoolName || '')}</p>
+        <table><thead><tr><th>โครงการ</th><th>มาตรฐาน/ประเด็น</th><th class="right">งบที่ตั้ง</th><th class="right">ใช้จริง</th><th>เชิงปริมาณ</th><th>เชิงคุณภาพ</th><th>ผล</th></tr></thead><tbody>
+        ${strategies.map((strategy) => `<tr><th colspan="7" style="text-align:left">${esc(strategy.label)}</th></tr>${live.filter((row) => row.strategyId === strategy.id).map((row) => {
+          const report = reportOf(row.id) || {};
+          return `<tr><td>${esc(row.code || '')} ${esc(row.name)}</td><td>${esc(shortStd(row.standard))}<br><small>${esc(row.mainIssues || '')}</small></td><td class="right">${money(row.budget)}</td>
+            <td class="right">${report.id ? money(report.budgetUsed) : '-'}</td><td>${esc(report.quantStatus || '-')}</td><td>${esc(report.qualStatus || '-')}</td><td>${esc(report.result || 'ยังไม่รายงาน')}</td></tr>`; }).join('')}`).join('')}
+        <tr><th colspan="2" class="right">รวม</th><th class="right">${money(planned)}</th><th class="right">${money(used)}</th><th colspan="3">บรรลุ ${count('บรรลุเป้าหมาย')} · บางส่วน ${count('บรรลุเป้าหมายบางส่วน')} · ไม่บรรลุ ${count('ไม่บรรลุเป้าหมาย')} · ยังไม่รายงาน ${live.length - rows.length}</th></tr>
+        </tbody></table>`);
+    });
+  };
+})();
+</script>

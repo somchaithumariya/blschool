@@ -1,0 +1,282 @@
+<script>
+/**
+ * ระบบดูแลช่วยเหลือนักเรียน: แฟ้มรายคน (แบบ 5.1–5.6 ในหน้าเดียว), แบบประเมิน SDQ 25 ข้อ และแผนที่บ้านนักเรียน
+ * แบบฟอร์มแต่ละแบบใช้เมนูแบบฟอร์มกลาง (App.openEntityForm) จึงเพิ่ม/แก้ช่องได้ที่ Config.gs ที่เดียว
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const esc = App.esc;
+  const attr = App.attr;
+  // เก็บใน App.cached('ui:student-care') ให้น้องใส่ใจ (และลิงก์จากแผนที่แดชบอร์ด) รู้ว่าผู้ใช้เปิดห้อง/แฟ้มของใครอยู่
+  // อ่านผ่าน Proxy ทุกครั้ง เพราะแคชของหน้าถูกล้างเมื่อออกจากระบบ
+  const store = () => App.cached('ui:student-care') || App.remember('ui:student-care', { homeroomId: '', studentId: '', tab: 'student-family' });
+  const ui = new Proxy({}, { get: (_, key) => store()[key], set: (_, key, value) => { store()[key] = value; return true; } });
+  const LEVEL_TONE = { 'เร่งด่วน': 'danger', 'เฝ้าระวัง': 'warning', 'ปกติ': 'success' };
+  const aiReady = (ai) => !!(ai && (ai.care || ai.bot));
+  const TABS = [['student-family', 'ครอบครัว (5.1)', 'fa-people-roof'], ['home-visits', 'เยี่ยมบ้าน (5.2)', 'fa-house'],
+    ['screenings', 'คัดกรอง (5.3)', 'fa-filter'], ['sdq', 'SDQ', 'fa-brain'], ['counseling', 'ให้คำปรึกษา (5.4)', 'fa-comments'],
+    ['referrals', 'ส่งต่อ (5.5)', 'fa-share-from-square'], ['aar', 'AAR', 'fa-lightbulb'], ['student-support', 'ดูแลช่วยเหลือ', 'fa-hand-holding-heart']];
+  const tone = (value) => /มีปัญหา|ยากจน|รุนแรง/.test(value) ? 'danger' : /เสี่ยง|ขาดแคลน/.test(value) ? 'warning' : value ? 'success' : 'info';
+
+  // ---------- รายชื่อนักเรียนในห้อง + สถานะแต่ละแบบ ----------
+  App.register('#/student-care', async () => {
+    if (ui.studentId) return renderFile();
+    const yearId = App.yearIdOrActive();
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-book-open-reader c-violet"></i> แฟ้มดูแลนักเรียนรายคน</h2>
+        <p>เลือกห้อง แล้วกดชื่อนักเรียนเพื่อเปิดแฟ้ม (ครอบครัว เยี่ยมบ้าน คัดกรอง SDQ ให้คำปรึกษา ส่งต่อ AAR)</p></div></div>
+      <div class="toolbar"><label>ปีการศึกษา<select data-year>${App.yearOptions(yearId)}</select></label>
+        <label>ห้องเรียน<select data-room>${App.options('homerooms', ui.homeroomId, { yearId, empty: '— เลือกห้อง —' })
+          .replace('</option>', `</option><option value="all" ${ui.homeroomId === 'all' ? 'selected' : ''}>ทั้งโรงเรียน (ภาพรวม)</option>`)}</select></label>
+        <label class="grow">ค้นหา<input type="search" data-q placeholder="ชื่อ หรือเลขประจำตัว"></label></div>
+      <div id="care-insight"></div>
+      <div id="care-list"><p class="muted">กรุณาเลือกห้องเรียน หรือ “ทั้งโรงเรียน” เพื่อดูภาพรวม</p></div></section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; ui.homeroomId = ''; App.route(); });
+    root.querySelector('[data-room]').addEventListener('change', (event) => { ui.homeroomId = event.target.value; loadRoom(); App.syncBot && App.syncBot(); });
+    root.querySelector('[data-q]').addEventListener('input', (event) => {
+      const q = event.target.value.trim().toLowerCase();
+      root.querySelectorAll('tr[data-find]').forEach((row) => row.classList.toggle('hidden', q && !row.dataset.find.includes(q)));
+    });
+    if (ui.homeroomId) loadRoom();
+  });
+
+  async function loadRoom() {
+    const box = document.getElementById('care-list');
+    const insightBox = document.getElementById('care-insight');
+    insightBox.innerHTML = '';
+    if (!ui.homeroomId) { box.innerHTML = '<p class="muted">กรุณาเลือกห้องเรียน หรือ “ทั้งโรงเรียน” เพื่อดูภาพรวม</p>'; return; }
+    const yearId = App.yearIdOrActive();
+    const whole = ui.homeroomId === 'all';
+    const [response, insight, ai] = await Promise.all([
+      whole ? Promise.resolve(null) : App.call('care.overview', { academicYearId: yearId, homeroomId: ui.homeroomId }),
+      App.call('care.insights', { academicYearId: yearId, homeroomId: ui.homeroomId }, { silent: !whole }), App.aiStatus()]);
+    if (!document.getElementById('care-insight')) return;
+    const levels = {};
+    if (insight.ok) {
+      insight.data.rows.forEach((row) => { levels[row.studentId] = row.level; });
+      insightBox.innerHTML = insightHtml(insight.data, aiReady(ai), whole);
+      bindInsight(insightBox, insight.data, yearId);
+    }
+    if (whole) { box.innerHTML = ''; return; }
+    if (!response.ok) return;
+    const rows = response.data.rows;
+    const count = (test) => rows.filter(test).length;
+    box.innerHTML = `<section class="stat-grid compact">
+        ${App.statCard('blue', 'นักเรียนในห้อง', rows.length, 'fa-users', 'คน')}
+        ${App.statCard('green', 'เยี่ยมบ้านแล้ว', count((row) => row.visitDate), 'fa-house', 'คน')}
+        ${App.statCard('amber', 'กลุ่มเสี่ยง/มีปัญหา (คัดกรอง)', count((row) => /เสี่ยง|มีปัญหา/.test(row.screening)), 'fa-filter', 'คน')}
+        ${App.statCard('purple', 'ประเมิน SDQ แล้ว', count((row) => row.sdq), 'fa-brain', 'คน')}</section>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>เลขที่</th><th>นักเรียน</th><th>ระดับ</th><th>ครอบครัว</th><th>เยี่ยมบ้าน</th><th>คัดกรอง</th><th>SDQ</th>
+        <th>ให้คำปรึกษา</th><th>ส่งต่อ</th></tr></thead><tbody>
+        ${rows.map((row) => `<tr data-find="${attr((row.code + ' ' + row.name).toLowerCase())}"><td class="num">${esc(row.number)}</td>
+          <td><button type="button" class="link-button" data-open="${attr(row.studentId)}">${esc(row.name)}</button><br><small class="muted">${esc(row.code)}</small></td>
+          <td>${levels[row.studentId] ? `<span class="badge ${LEVEL_TONE[levels[row.studentId]]}">${esc(levels[row.studentId])}</span>` : insight.ok ? '<span class="muted">ปกติ</span>' : ''}</td>
+          <td>${row.family ? '<i class="fa-solid fa-check c-green"></i>' : '<span class="muted">—</span>'}</td>
+          <td>${row.visitDate ? App.fmtDate(row.visitDate) : '<span class="muted">ยังไม่เยี่ยม</span>'}</td>
+          <td>${row.screening ? `<span class="badge ${tone(row.screening)}">${esc(row.screening)}</span>` : '<span class="muted">—</span>'}</td>
+          <td>${row.sdq ? `<span class="badge ${tone(row.sdq)}">${esc(row.sdq)}</span>` : '<span class="muted">—</span>'}</td>
+          <td class="num">${row.counseling || ''}</td><td class="num">${row.referrals || ''}</td></tr>`).join('') || '<tr><td colspan="9" class="empty-row">ไม่มีนักเรียนในห้องนี้</td></tr>'}
+        </tbody></table></div>`;
+    box.querySelectorAll('[data-open]').forEach((button) => button.addEventListener('click', () => openStudent(button.dataset.open)));
+  }
+
+  function openStudent(studentId) { ui.studentId = studentId; renderFile(); App.syncBot && App.syncBot(); }
+
+  // ---------- ภาพรวมการดูแล (คำนวณจากข้อมูลทุกด้าน ไม่ต้องใช้ AI) ----------
+  const PRIORITY_SHOWN = 12;
+  function insightHtml(data, canAi, whole) {
+    const s = data.summary;
+    const pct = (value) => s.total ? Math.round(value * 1000 / s.total) / 10 : 0;
+    const gap = (label, value, icon) => `<span class="ci-gap ${value ? 'on' : ''}"><i class="fa-solid ${icon}"></i> ${esc(label)} <b>${App.num(value)}</b></span>`;
+    return `<section class="ci-panel"><div class="ci-head"><div><h3><i class="fa-solid fa-hand-holding-heart"></i> ภาพรวมการดูแล · ${esc(data.scope)}</h3>
+        <p class="muted">จัดระดับจากคัดกรอง SDQ เยี่ยมบ้าน ครอบครัว การมาเรียน ผลการเรียน เรื่องที่ยังไม่ปิด และการติดตามในโฮมรูม — เป็นการคำนวณเบื้องต้น ไม่ใช่การวินิจฉัย</p></div>
+        ${canAi ? '<button type="button" class="primary-button ci-ai" data-overview-ai><i class="fa-solid fa-wand-magic-sparkles"></i> น้องใส่ใจวิเคราะห์ภาพรวม</button>' : ''}</div>
+      <div class="ci-levels" role="img" aria-label="เร่งด่วน ${s.urgent} เฝ้าระวัง ${s.watch} ปกติ ${s.normal} คน">
+        <span class="urgent" style="flex:${s.urgent}"></span><span class="watch" style="flex:${s.watch}"></span><span class="normal" style="flex:${s.normal}"></span></div>
+      <div class="ci-legend"><span><i class="urgent"></i> เร่งด่วน <b>${App.num(s.urgent)}</b> คน (${pct(s.urgent)}%)</span>
+        <span><i class="watch"></i> เฝ้าระวัง <b>${App.num(s.watch)}</b> คน (${pct(s.watch)}%)</span>
+        <span><i class="normal"></i> ปกติ <b>${App.num(s.normal)}</b> คน</span><span class="muted">รวม ${App.num(s.total)} คน</span></div>
+      <div class="ci-gaps">${gap('ยังไม่คัดกรอง', s.notScreened, 'fa-filter')}${gap('ยังไม่เยี่ยมบ้าน', s.notVisited, 'fa-house')}${gap('ยังไม่ประเมิน SDQ', s.noSdq, 'fa-brain')}
+        ${gap('เรื่องที่ยังไม่ปิด', s.openCases, 'fa-folder-open')}${gap('มาเรียนต่ำกว่า 80%', s.lowAttendance, 'fa-user-clock')}${gap('มีผลการเรียน 0/ร/มส', s.lowGrades, 'fa-file-circle-exclamation')}</div>
+      ${whole && s.rooms.length ? `<details class="ci-rooms"><summary>แยกรายห้อง (${s.rooms.length} ห้อง)</summary><div class="table-wrap"><table class="data-table"><thead><tr><th>ห้อง</th><th class="num">นักเรียน</th><th class="num">เร่งด่วน</th><th class="num">เฝ้าระวัง</th></tr></thead>
+        <tbody>${s.rooms.map((room) => `<tr><td>${esc(room.room)}</td><td class="num">${room.total}</td><td class="num">${room.urgent || ''}</td><td class="num">${room.watch || ''}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
+      <h4>นักเรียนที่ควรช่วยก่อน</h4>
+      ${data.rows.length ? `<ol class="ci-list">${data.rows.map((row, index) => `<li class="${index >= PRIORITY_SHOWN ? 'hidden' : ''}" data-extra="${index >= PRIORITY_SHOWN ? 1 : ''}">
+          <span class="badge ${LEVEL_TONE[row.level]}">${esc(row.level)}</span>
+          <button type="button" class="link-button" data-open="${attr(row.studentId)}">${esc(row.name)}</button> <small class="muted">${esc(row.room)} เลขที่ ${esc(row.number)}</small>
+          <div class="ci-reasons">${row.reasons.map((text) => `<span>${esc(text)}</span>`).join('')}</div></li>`).join('')}</ol>
+        ${data.rows.length > PRIORITY_SHOWN ? `<button type="button" class="ghost-button" data-more>แสดงทั้งหมด ${data.rows.length} คน</button>` : ''}`
+        : '<p class="muted">ไม่พบนักเรียนที่มีสัญญาณเตือนจากข้อมูลที่บันทึกไว้</p>'}</section>`;
+  }
+
+  function bindInsight(box, data, yearId) {
+    box.querySelectorAll('[data-open]').forEach((button) => button.addEventListener('click', () => openStudent(button.dataset.open)));
+    const more = box.querySelector('[data-more]');
+    if (more) more.addEventListener('click', () => { box.querySelectorAll('[data-extra="1"]').forEach((item) => item.classList.remove('hidden')); more.remove(); });
+    const ai = box.querySelector('[data-overview-ai]');
+    if (ai) ai.addEventListener('click', () => App.showAi('น้องใส่ใจวิเคราะห์ภาพรวม · ' + data.scope, 'care.analyzeOverview', { academicYearId: yearId, homeroomId: ui.homeroomId }));
+  }
+
+  // ---------- แฟ้มรายคน ----------
+  async function renderFile() {
+    const [response, signals, ai] = await Promise.all([App.call('care.file', { studentId: ui.studentId, academicYearId: App.yearIdOrActive() }),
+      App.call('care.insights', { studentId: ui.studentId, academicYearId: App.yearIdOrActive() }, { silent: true, quiet: true }), App.aiStatus()]);
+    if (!response.ok) { ui.studentId = ''; return; }
+    const data = response.data;
+    const mark = signals.ok ? signals.data.student : null;
+    const s = data.student;
+    const info = data.info || {};
+    App.content(`<section class="panel care-head"><div class="panel-head"><div>
+        <button type="button" class="ghost-button" data-back><i class="fa-solid fa-arrow-left"></i> กลับไปรายชื่อ</button>
+        <h2><i class="fa-solid fa-user-graduate c-violet"></i> ${esc(s.name)}</h2>
+        <p>เลขประจำตัว ${esc(s.code || '-')} · ห้อง ${esc(data.homeroom ? data.homeroom.name : '-')} เลขที่ ${esc(data.number || '-')} · เพศ ${esc(s.gender || '-')}
+          · วันเกิด ${s.birthDate ? App.fmtDate(s.birthDate) : '-'}</p>
+        <p class="muted">ผู้ปกครอง ${esc(s.guardianName || '-')} · โทร ${esc(s.guardianPhone || '-')} · น้ำหนัก ${esc(info.weight || '-')} กก. ส่วนสูง ${esc(info.height || '-')} ซม.
+          · หมู่เลือด ${esc(info.bloodType || '-')} · โรคประจำตัว ${esc(info.disease || '-')}</p></div>
+        <div class="actions no-print">${aiReady(ai) ? '<button type="button" class="primary-button ci-ai" data-ai><i class="fa-solid fa-wand-magic-sparkles"></i> น้องใส่ใจวิเคราะห์รายบุคคล</button>' : ''}
+          <button type="button" class="secondary-button" data-print><i class="fa-solid fa-print"></i> พิมพ์แฟ้ม</button></div></div>
+      ${mark ? signalCard(mark) : ''}
+      <div class="tab-bar">${TABS.map(([key, name, icon]) => `<button type="button" class="tab ${ui.tab === key ? 'active' : ''}" data-tab="${key}">
+        <i class="fa-solid ${icon}"></i> ${esc(name)} <span class="tab-count">${(data.forms[key] || []).length || ''}</span></button>`).join('')}</div>
+      <div id="care-tab"></div></section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-back]').addEventListener('click', () => { ui.studentId = ''; App.route(); App.syncBot && App.syncBot(); });
+    root.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => {
+      ui.tab = button.dataset.tab;
+      root.querySelectorAll('[data-tab]').forEach((item) => item.classList.toggle('active', item === button));
+      paintTab(data);
+    }));
+    const aiButton = root.querySelector('[data-ai]');
+    if (aiButton) aiButton.addEventListener('click', () => App.showAi('น้องใส่ใจวิเคราะห์ผู้เรียนรายบุคคล', 'care.aiSummary', { studentId: s.id, academicYearId: data.academicYearId },
+      (result) => result.summary + '\n\n(ข้อมูลที่ส่งให้ AI: ' + result.sentForms.join(', ') + ' — เฉพาะชื่อต้น ไม่มีนามสกุล/เลขประจำตัว/เบอร์โทร)'));
+    root.querySelector('[data-print]').addEventListener('click', () => printFile(data));
+    paintTab(data);
+  }
+
+  // หัวแฟ้ม: ระดับที่ระบบคำนวณ สัญญาณเตือน จุดแข็ง และข้อมูลที่ยังขาด (ไม่ใช้ AI)
+  function signalCard(mark) {
+    const chips = (items, cls) => items.map((text) => `<span class="${cls}">${esc(text)}</span>`).join('');
+    const facts = [mark.attendanceRate === null ? '' : `มาเรียนร้อยละ ${mark.attendanceRate}`, mark.gpa === null ? '' : `ผลการเรียนเฉลี่ย ${mark.gpa}`,
+      mark.followDays ? `ติดตามในโฮมรูม ${mark.followDays} วัน (30 วันล่าสุด)` : ''].filter(Boolean);
+    return `<div class="ci-student ${LEVEL_TONE[mark.level]}"><div class="ci-student-level"><small>ระดับจากข้อมูล</small><strong>${esc(mark.level)}</strong></div>
+      <div class="ci-student-body">
+        ${mark.reasons.length ? `<div><b>สัญญาณเตือน</b><div class="ci-reasons">${chips(mark.reasons, '')}</div></div>` : '<div><b>สัญญาณเตือน</b> <span class="muted">ไม่พบจากข้อมูลที่บันทึก</span></div>'}
+        ${mark.strengths.length ? `<div><b>จุดแข็ง</b><div class="ci-reasons good">${chips(mark.strengths, '')}</div></div>` : ''}
+        ${mark.gaps.length ? `<div><b>ข้อมูลที่ยังขาด</b><div class="ci-reasons gap">${chips(mark.gaps, '')}</div></div>` : ''}
+        ${facts.length ? `<small class="muted">${esc(facts.join(' · '))}</small>` : ''}</div></div>`;
+  }
+
+  function listFields(entity) { return entity.fields.filter((field) => field.list && field.key !== 'studentId' && field.key !== 'academicYearId'); }
+
+  function paintTab(data) {
+    const key = ui.tab;
+    const entity = App.state.entities[key];
+    const box = document.getElementById('care-tab');
+    if (!entity) { box.innerHTML = '<p class="muted">ไม่มีสิทธิ์ดูแบบฟอร์มนี้</p>'; return; }
+    const rows = data.forms[key] || [];
+    const canEdit = App.can(entity.editPermission);
+    const single = key === 'student-family';
+    const fields = listFields(entity);
+    box.innerHTML = `<div class="actions" style="margin:12px 0">
+        ${canEdit && !(single && rows.length) ? `<button type="button" class="primary-button" data-add><i class="fa-solid fa-plus"></i> เพิ่ม${esc(entity.label)}</button>` : ''}
+        ${key === 'sdq' && App.can('sdq.edit') ? '<button type="button" class="secondary-button" data-sdq25><i class="fa-solid fa-list-check"></i> ประเมินด้วยแบบสอบถาม 25 ข้อ</button>' : ''}
+        ${key === 'home-visits' ? '<a class="secondary-button" href="#/home-map"><i class="fa-solid fa-map-location-dot"></i> ดูแผนที่บ้านนักเรียน</a>' : ''}</div>
+      <div class="table-wrap"><table class="data-table"><thead><tr>${fields.map((field) => `<th>${esc(field.label)}</th>`).join('')}<th></th></tr></thead>
+        <tbody>${rows.length ? rows.map((row) => `<tr>${fields.map((field) => `<td>${App.entityCellHtml(field, row)}</td>`).join('')}
+          <td class="actions"><button type="button" class="ghost-button" data-view="${attr(row.id)}" title="ดูรายละเอียด"><i class="fa-regular fa-eye"></i></button>
+          ${canEdit ? `<button type="button" class="ghost-button" data-edit="${attr(row.id)}" title="แก้ไข"><i class="fa-solid fa-pen"></i></button>` : ''}</td></tr>`).join('')
+          : `<tr><td colspan="${fields.length + 1}" class="empty-row">ยังไม่มีข้อมูล</td></tr>`}</tbody></table></div>`;
+    const reload = () => renderFile();
+    const find = (id) => rows.find((row) => row.id === id);
+    const add = box.querySelector('[data-add]');
+    if (add) add.addEventListener('click', () => App.openEntityForm(key, null, reload, { studentId: data.student.id, academicYearId: data.academicYearId }));
+    box.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => App.openEntityDetail(key, find(button.dataset.view))));
+    box.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => App.openEntityForm(key, find(button.dataset.edit), reload)));
+    const sdq = box.querySelector('[data-sdq25]');
+    if (sdq) sdq.addEventListener('click', () => App.openSdq25(data.student.id, data.academicYearId, reload));
+  }
+
+  function printFile(data) {
+    const s = data.student;
+    const sections = TABS.map(([key, name]) => {
+      const entity = App.state.entities[key];
+      const rows = data.forms[key] || [];
+      if (!entity || !rows.length) return '';
+      return `<h3>${esc(name)}</h3>` + rows.map((row) => `<table>${entity.fields.filter((field) => !field.hidden && field.type !== 'file' && field.key !== 'studentId'
+        && field.key !== 'academicYearId' && row[field.key] !== '' && row[field.key] !== undefined && row[field.key] !== false)
+        .map((field) => `<tr><th style="width:32%">${esc(field.label)}</th><td class="pre">${esc(App.entityCellText(field, row[field.key]))}</td></tr>`).join('')}</table>`).join('');
+    }).join('');
+    App.printHtml('แฟ้มดูแลนักเรียน ' + s.name, `<h2>แฟ้มระบบดูแลช่วยเหลือนักเรียนรายบุคคล</h2>
+      <p><b>${esc(s.name)}</b> เลขประจำตัว ${esc(s.code || '-')} ห้อง ${esc(data.homeroom ? data.homeroom.name : '-')} เลขที่ ${esc(data.number || '-')}
+      ปีการศึกษา ${esc(App.label('academicYears', data.academicYearId))}</p>${sections || '<p class="muted">ยังไม่มีข้อมูลในแบบฟอร์ม</p>'}
+      <div class="sign"><div>ลงชื่อ ....................................<br>ครูที่ปรึกษา</div><div>ลงชื่อ ....................................<br>หัวหน้างานระบบดูแลช่วยเหลือนักเรียน</div></div>`);
+  }
+
+  // ---------- แบบประเมิน SDQ 25 ข้อ ----------
+  App.openSdq25 = async (studentId, academicYearId, done) => {
+    const items = App.cached('sdq:items') || App.remember('sdq:items', (await App.call('care.sdqItems')).data);
+    if (!items) return;
+    const body = App.openModal('แบบประเมิน SDQ 25 ข้อ', `<form class="sdq-form" novalidate>
+      <div class="form-grid">${studentId ? '' : `<label class="wide">นักเรียน<select name="studentId" required>${App.options('students', '')}</select></label>`}
+        <label>ผู้ประเมิน<select name="assessor">${items.assessors.map((name) => `<option>${esc(name)}</option>`).join('')}</select></label></div>
+      <p class="muted">เลือกคำตอบตามพฤติกรรมในช่วง 6 เดือนที่ผ่านมา</p>
+      <div class="table-wrap"><table class="data-table sdq-table"><thead><tr><th>#</th><th>พฤติกรรม</th><th>ไม่จริง</th><th>ค่อนข้างจริง</th><th>จริงแน่นอน</th></tr></thead>
+        <tbody>${items.items.map((text, index) => `<tr><td class="num">${index + 1}</td><td>${esc(text)}</td>
+          ${[0, 1, 2].map((value) => `<td class="center"><input type="radio" name="q${index}" value="${value}" aria-label="ข้อ ${index + 1} ระดับ ${value}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      <p class="form-error" data-form-error></p>
+      <div class="form-actions"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="submit" class="primary-button"><i class="fa-solid fa-calculator"></i> คำนวณและบันทึก</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const answers = items.items.map((_, index) => { const checked = form.querySelector(`[name=q${index}]:checked`); return checked ? Number(checked.value) : null; });
+      const missing = answers.map((value, index) => value === null ? index + 1 : 0).filter(Boolean);
+      if (missing.length) { form.querySelector('[data-form-error]').textContent = 'ยังไม่ได้ตอบข้อ ' + missing.join(', '); return; }
+      const target = studentId || form.elements.studentId.value;
+      if (!target) { form.querySelector('[data-form-error]').textContent = 'กรุณาเลือกนักเรียน'; return; }
+      const response = await App.call('care.saveSdq', { studentId: target, academicYearId: academicYearId || App.yearIdOrActive(),
+        assessor: form.elements.assessor.value, answers }, { quiet: true });
+      if (!response.ok) { form.querySelector('[data-form-error]').textContent = App.messageOf(response.error); return; }
+      const r = response.data;
+      App.forget('entity:sdq:');
+      body.innerHTML = `<div class="sdq-result"><h3>ผลการประเมิน: <span class="badge ${tone(r.result)}">${esc(r.result)}</span></h3>
+        <table class="data-table"><tr><th>ด้านอารมณ์</th><td>${r.scores.emotional}</td></tr><tr><th>ด้านความประพฤติ</th><td>${r.scores.conduct}</td></tr>
+        <tr><th>ด้านสมาธิสั้น/อยู่ไม่นิ่ง</th><td>${r.scores.hyperactivity}</td></tr><tr><th>ด้านความสัมพันธ์กับเพื่อน</th><td>${r.scores.peer}</td></tr>
+        <tr><th>รวมคะแนนปัญหา (4 ด้าน)</th><td><b>${r.totalScore}</b></td></tr><tr><th>ด้านสัมพันธภาพทางสังคม (จุดแข็ง)</th><td>${r.scores.prosocial}</td></tr></table>
+        <div class="form-actions"><button type="button" class="primary-button" data-ok>เสร็จสิ้น</button></div></div>`;
+      body.querySelector('[data-ok]').addEventListener('click', () => { App.closeModal(); if (done) done(); });
+    });
+  };
+
+  // ปุ่มแบบสอบถาม 25 ข้อในเมนู "แบบประเมิน SDQ"
+  App.entityAfter['sdq'] = (container) => {
+    if (!App.can('sdq.edit')) return;
+    container.innerHTML = `<section class="panel no-print"><div class="panel-head"><div><h2><i class="fa-solid fa-list-check c-rose"></i> ประเมินด้วยแบบสอบถาม 25 ข้อ</h2>
+      <p>ตอบ 25 ข้อ ระบบคำนวณคะแนน 5 ด้านและผลการประเมินให้อัตโนมัติ</p></div>
+      <button type="button" class="primary-button" data-sdq25>เริ่มประเมิน</button></div></section>`;
+    container.querySelector('[data-sdq25]').addEventListener('click', () => App.openSdq25('', App.yearIdOrActive(), () => { App.reloadEntity('sdq'); App.route(); }));
+  };
+
+  // ---------- แผนที่บ้านนักเรียน ----------
+  App.register('#/home-map', async () => {
+    const yearId = App.yearIdOrActive();
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-map-location-dot c-green"></i> แผนที่บ้านนักเรียน</h2>
+        <p>จากพิกัดในบันทึกการเยี่ยมบ้าน (5.2) ครั้งล่าสุดของแต่ละคน · สีแดง = ยากจน สีส้ม = ขาดแคลน สีเขียว = พอเพียง</p></div>
+        <label>ปีการศึกษา<select data-year>${App.yearOptions(yearId)}</select></label></div>
+      <div id="home-map" class="map-box"><p class="muted">กำลังโหลดแผนที่…</p></div><div id="home-list"></div></section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; App.route(); });
+    const response = await App.call('care.homeMap', { academicYearId: yearId }, { silent: true });
+    if (!response.ok) return;
+    const { points, school } = response.data;
+    const color = (value) => value === 'ยากจน' ? '#dc2626' : value === 'ขาดแคลน' ? '#f59e0b' : '#16a34a';
+    document.getElementById('home-list').innerHTML = `<p class="muted">มีพิกัดบ้าน ${App.num(points.length)} คน</p>` + App.simpleTable(['ห้อง', 'นักเรียน', 'วันที่เยี่ยม', 'ฐานะ', 'ความสัมพันธ์ในครอบครัว', 'ระยะทาง (กม.)'],
+      points.map((point) => [point.room, point.name, App.fmtDate(point.visitDate), point.economicStatus, point.familyRelation, point.distanceKm || '']));
+    if (!points.length) { document.getElementById('home-map').innerHTML = '<p class="muted">ยังไม่มีพิกัดบ้าน — ใส่ละติจูด/ลองจิจูดในบันทึกการเยี่ยมบ้าน (กด “ใช้ตำแหน่งปัจจุบัน” ขณะอยู่ที่บ้านนักเรียน)</p>'; return; }
+    App.renderMap(document.getElementById('home-map'), points.map((point) => ({ lat: point.lat, lng: point.lng, color: color(point.economicStatus),
+      html: `<b>${esc(point.name)}</b><br>ห้อง ${esc(point.room)}<br>เยี่ยมบ้าน ${App.fmtDate(point.visitDate)}<br>ฐานะ: ${esc(point.economicStatus || '-')}` })), school);
+  });
+})();
+</script>

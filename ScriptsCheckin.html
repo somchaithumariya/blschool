@@ -1,0 +1,441 @@
+<script>
+/**
+ * ลงเวลามาทำงาน (ไม่ถ่ายรูป) + รายงานรายวัน/รายสัปดาห์/รายเดือน/รายภาคเรียน
+ * และรายงานเวลาเรียนนักเรียน: ต่ำกว่า 80% ทั้งภาคเรียน / ประวัติการมาเรียนรายคน
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const esc = App.esc;
+  const attr = App.attr;
+  const STATUS_TONE = { 'มาปกติ': 'success', 'มาสาย': 'warning', 'ไปราชการ': 'info', 'ลา': 'info', 'ขาด': 'danger' };
+  const SHORT = { 'มาปกติ': '✓', 'มาสาย': 'ส', 'ไปราชการ': 'ร', 'ลา': 'ล', 'ขาด': 'ข' };
+  const iso = (date) => { const copy = new Date(date); copy.setMinutes(copy.getMinutes() - copy.getTimezoneOffset()); return copy.toISOString().slice(0, 10); };
+
+  function position() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) return resolve({});
+      navigator.geolocation.getCurrentPosition((pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+        () => resolve({}), { enableHighAccuracy: true, timeout: 15000 });
+    });
+  }
+
+  // ---------- ลงเวลาของฉัน ----------
+  App.register('#/checkin', async () => {
+    const response = await App.call('checkin.today');
+    if (!response.ok) return App.renderError(response.error);
+    const d = response.data;
+    const r = d.record;
+    App.content(`<section class="panel checkin-panel"><div class="checkin-clock" data-clock>${esc(d.time)}</div>
+      <p class="muted">${App.fmtDate(d.date)} · เวลาเข้างาน ${esc(d.config.startTime)} น. · หลัง ${esc(d.config.lateTime)} น. ถือว่ามาสาย · เลิกงาน ${esc(d.config.endTime)} น.
+        ${d.config.useGps ? `<br><i class="fa-solid fa-location-dot"></i> ต้องอยู่ในรัศมี ${esc(d.config.radius)} เมตรจากโรงเรียน` : ''}</p>
+      ${!d.linked ? '<div class="notice">บัญชีของคุณยังไม่ได้ผูกกับทะเบียนบุคลากร กรุณาแจ้งผู้ดูแลระบบ</div>' : `
+      <div class="checkin-status">${r ? `เข้างาน <b>${esc(r.checkIn)}</b> <span class="badge ${STATUS_TONE[r.status] || 'info'}">${esc(r.status)}</span>
+        ${r.checkOut ? ` · ออกงาน <b>${esc(r.checkOut)}</b>` : ''}` : 'วันนี้ยังไม่ได้ลงเวลา'}</div>
+      <div class="checkin-actions">
+        <button type="button" class="checkin-button in" data-in ${r ? 'disabled' : ''}><i class="fa-solid fa-right-to-bracket"></i> ลงเวลาเข้างาน</button>
+        <button type="button" class="checkin-button out" data-out ${!r || r.checkOut ? 'disabled' : ''}><i class="fa-solid fa-right-from-bracket"></i> ลงเวลาออกงาน</button></div>`}
+      </section>
+      ${d.linked ? `<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-calendar c-blue"></i> ประวัติเดือนนี้</h2></div></div>
+        ${App.simpleTable(['วันที่', 'เข้างาน', 'ออกงาน', 'สถานะ', 'หมายเหตุ'], d.history.map((row) => [App.fmtDate(row.checkDate), row.checkIn, row.checkOut, row.status, row.note]))}</section>` : ''}`);
+    const root = document.getElementById('page-content');
+    const clock = root.querySelector('[data-clock]');
+    const tick = setInterval(() => {
+      if (!document.body.contains(clock)) return clearInterval(tick);
+      clock.textContent = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }, 1000);
+    const act = async (button, action) => {
+      button.disabled = true;
+      const location = d.config.useGps ? await position() : {};
+      const result = await App.call(action, location);
+      if (!result.ok) { button.disabled = false; return; }
+      App.toast(action === 'checkin.in' ? `ลงเวลาเข้างาน ${result.data.time} น. (${result.data.status})` : `ลงเวลาออกงาน ${result.data.time} น.`, 'success');
+      App.route();
+    };
+    const inButton = root.querySelector('[data-in]');
+    if (inButton) inButton.addEventListener('click', () => act(inButton, 'checkin.in'));
+    const outButton = root.querySelector('[data-out]');
+    if (outButton) outButton.addEventListener('click', () => act(outButton, 'checkin.out'));
+  });
+
+  // ---------- รายงานการมาทำงาน ----------
+  const report = { preset: 'today', from: '', to: '', data: null };
+
+  function presetRange(preset) {
+    const today = new Date();
+    if (preset === 'week') { const start = new Date(today); start.setDate(today.getDate() - ((today.getDay() + 6) % 7)); const end = new Date(start); end.setDate(start.getDate() + 4); return [iso(start), iso(end)]; }
+    if (preset === 'month') return [iso(new Date(today.getFullYear(), today.getMonth(), 1)), iso(new Date(today.getFullYear(), today.getMonth() + 1, 0))];
+    if (preset === 'term') {
+      const year = App.lookupList('academicYears').find((item) => String(item.id) === String(App.yearIdOrActive()));
+      if (year && year.startsAt && year.endsAt) return [String(year.startsAt).slice(0, 10), String(year.endsAt).slice(0, 10)];
+    }
+    return [iso(today), iso(today)];
+  }
+
+  App.register('#/checkin-report', async () => {
+    if (!report.from) [report.from, report.to] = presetRange(report.preset);
+    const canManage = App.can('checkinReport.manage');
+    App.content(`<section class="panel no-print"><div class="toolbar">
+        <label>ช่วงเวลา<select data-preset>${[['today', 'วันนี้'], ['week', 'สัปดาห์นี้'], ['month', 'เดือนนี้'], ['term', 'ภาคเรียน (ตามปีการศึกษาที่เลือก)'], ['custom', 'กำหนดเอง']]
+          .map(([key, name]) => `<option value="${key}" ${report.preset === key ? 'selected' : ''}>${name}</option>`).join('')}</select></label>
+        <label>ปีการศึกษา<select data-year>${App.yearOptions()}</select></label>
+        <label>ตั้งแต่<input type="date" data-from value="${attr(report.from)}"></label><label>ถึง<input type="date" data-to value="${attr(report.to)}"></label>
+        <div class="actions"><button type="button" class="primary-button" data-load>แสดงรายงาน</button>
+          ${canManage ? '<button type="button" class="secondary-button" data-config><i class="fa-solid fa-gear"></i> ตั้งค่าเวลา/พิกัด</button>' : ''}</div></div></section>
+      <div id="checkin-report"></div>`);
+    const root = document.getElementById('page-content');
+    const from = root.querySelector('[data-from]');
+    const to = root.querySelector('[data-to]');
+    root.querySelector('[data-preset]').addEventListener('change', (event) => {
+      report.preset = event.target.value;
+      if (report.preset !== 'custom') { [report.from, report.to] = presetRange(report.preset); from.value = report.from; to.value = report.to; }
+    });
+    root.querySelector('[data-year]').addEventListener('change', (event) => {
+      App.state.yearId = event.target.value;
+      if (report.preset === 'term') { [report.from, report.to] = presetRange('term'); from.value = report.from; to.value = report.to; }
+    });
+    [from, to].forEach((input) => input.addEventListener('change', () => { report.preset = 'custom'; root.querySelector('[data-preset]').value = 'custom'; }));
+    root.querySelector('[data-load]').addEventListener('click', () => { report.from = from.value; report.to = to.value; loadReport(); });
+    const config = root.querySelector('[data-config]');
+    if (config) config.addEventListener('click', openConfig);
+    loadReport();
+  });
+
+  async function loadReport() {
+    const box = document.getElementById('checkin-report');
+    const response = await App.call('checkin.report', { from: report.from, to: report.to });
+    if (!response.ok) return;
+    const d = report.data = response.data;
+    const totals = { 'มาปกติ': 0, 'มาสาย': 0, 'ไปราชการ': 0, 'ลา': 0, 'ขาด': 0 };
+    d.people.forEach((person) => Object.keys(totals).forEach((key) => { totals[key] += person.counts[key] || 0; }));
+    const single = d.from === d.to;
+    const grid = !single && d.days.length <= 31;
+    const title = single ? 'รายงานการมาทำงานประจำวันที่ ' + App.fmtDate(d.from) : `รายงานการมาทำงาน ${App.fmtDate(d.from)} – ${App.fmtDate(d.to)}`;
+    box.innerHTML = `<section class="stat-grid">
+        ${App.statCard('green', 'มาปกติ (คน-วัน)', totals['มาปกติ'], 'fa-user-check', 'วันทำงาน ' + d.days.length + ' วัน (นับแล้ว ' + d.countedDays + ')')}
+        ${App.statCard('amber', 'มาสาย (คน-วัน)', totals['มาสาย'], 'fa-clock', 'หลัง ' + d.config.lateTime + ' น.')}
+        ${App.statCard('blue', 'ไปราชการ/ลา', totals['ไปราชการ'] + totals['ลา'], 'fa-plane-departure', 'บันทึกโดยผู้ดูแลระบบ')}
+        ${App.statCard('purple', 'ไม่ได้ลงเวลา (คน-วัน)', totals['ขาด'], 'fa-user-xmark', 'นับเฉพาะวันที่ผ่านเวลาเลิกงานแล้ว')}</section>
+      <section class="panel print-sheet"><div class="panel-head"><div><h2>${esc(title)}</h2><p class="muted">วันทำงาน = จันทร์–ศุกร์ ที่ไม่ใช่วันหยุดในปฏิทินโรงเรียน</p></div>
+        <div class="actions no-print"><button type="button" class="secondary-button" data-csv>ส่งออก CSV</button>
+          <button type="button" class="secondary-button" onclick="window.print()"><i class="fa-solid fa-print"></i> พิมพ์</button></div></div>
+        ${single && !d.days.length ? '<p class="notice">วันที่เลือกเป็นวันหยุด (เสาร์–อาทิตย์ หรือวันหยุดในปฏิทินโรงเรียน) จึงไม่นับการมาทำงาน</p>' : ''}
+        ${single ? dailyTable(d) : grid ? gridTable(d) : summaryTable(d)}
+        ${!single && grid ? `<h3>สรุปรายคน</h3>${summaryTable(d)}` : ''}</section>`;
+    box.querySelector('[data-csv]').addEventListener('click', () => {
+      App.downloadCsv('รายงานการมาทำงาน_' + d.from + '_' + d.to + '.csv', ['รหัส', 'ชื่อ-สกุล', 'ตำแหน่ง', 'มาปกติ', 'มาสาย', 'ไปราชการ', 'ลา', 'ไม่ได้ลงเวลา', 'เวลามาเฉลี่ย']
+        .concat(d.days.map((day) => day)), d.people.map((person) => [person.code, person.name, person.position, person.counts['มาปกติ'], person.counts['มาสาย'],
+        person.counts['ไปราชการ'], person.counts['ลา'], person.counts['ขาด'], person.averageIn].concat(d.days.map((day) => {
+          const record = person.records[day]; return record ? `${record.status} ${record.checkIn || ''}${record.checkOut ? '-' + record.checkOut : ''}` : '';
+        }))));
+    });
+    if (App.can('checkinReport.manage')) box.querySelectorAll('[data-cell]').forEach((cell) => cell.addEventListener('click', () => {
+      const [personnelId, day] = cell.dataset.cell.split('|');
+      openManual(personnelId, day, (d.people.find((person) => person.personnelId === personnelId) || { records: {} }).records[day]);
+    }));
+  }
+
+  function dailyTable(d) {
+    const day = d.from;
+    return `<div class="table-wrap"><table class="data-table"><thead><tr><th>#</th><th>ชื่อ-สกุล</th><th>ตำแหน่ง</th><th>เข้างาน</th><th>ออกงาน</th><th>สถานะ</th><th>หมายเหตุ</th></tr></thead><tbody>
+      ${d.people.map((person, index) => { const record = person.records[day]; const counted = d.countedDays > 0;
+        const status = record ? record.status : counted ? 'ขาด' : 'ยังไม่ลงเวลา';
+        return `<tr data-cell="${attr(person.personnelId + '|' + day)}" class="${App.can('checkinReport.manage') ? 'clickable' : ''}"><td class="num">${index + 1}</td><td>${esc(person.name)}</td>
+          <td>${esc(person.position)}</td><td>${esc(record ? record.checkIn : '')}</td><td>${esc(record ? record.checkOut : '')}</td>
+          <td><span class="badge ${STATUS_TONE[status] || 'info'}">${esc(status)}</span></td><td>${esc(record ? record.note : '')}</td></tr>`; }).join('')}</tbody></table></div>`;
+  }
+
+  function gridTable(d) {
+    return `<p class="muted no-print">✓ = มาปกติ · ส = มาสาย · ร = ไปราชการ · ล = ลา · ข = ไม่ได้ลงเวลา${App.can('checkinReport.manage') ? ' · กดช่องเพื่อบันทึก/แก้ไขแทน' : ''}</p>
+      <div class="table-wrap"><table class="data-table grid-table"><thead><tr><th>ชื่อ-สกุล</th>${d.days.map((day) => `<th class="center">${Number(day.slice(8))}</th>`).join('')}</tr></thead><tbody>
+      ${d.people.map((person) => `<tr><td class="nowrap">${esc(person.name)}</td>${d.days.map((day) => {
+        const record = person.records[day];
+        const counted = day < new Date().toISOString().slice(0, 10) || !!record;
+        const status = record ? record.status : counted ? 'ขาด' : '';
+        return `<td class="center cell-${STATUS_TONE[status] || 'none'}" data-cell="${attr(person.personnelId + '|' + day)}" title="${attr(record ? status + ' ' + (record.checkIn || '') + (record.checkOut ? '–' + record.checkOut : '') : status)}">${SHORT[status] || ''}</td>`;
+      }).join('')}</tr>`).join('')}</tbody></table></div>`;
+  }
+
+  function summaryTable(d) {
+    return App.simpleTable(['รหัส', 'ชื่อ-สกุล', 'ตำแหน่ง', 'มาปกติ', 'มาสาย', 'ไปราชการ', 'ลา', 'ไม่ได้ลงเวลา', 'เวลามาเฉลี่ย'],
+      d.people.map((person) => [person.code, person.name, person.position, person.counts['มาปกติ'], person.counts['มาสาย'], person.counts['ไปราชการ'],
+        person.counts['ลา'], person.counts['ขาด'], person.averageIn]));
+  }
+
+  function openManual(personnelId, day, record) {
+    const body = App.openModal('บันทึกการมาทำงานแทน', `<form class="form-grid" novalidate>
+      <p class="wide"><b>${esc(App.personName(personnelId))}</b> วันที่ ${App.fmtDate(day)}</p>
+      <label>สถานะ<select name="status">${(report.data.statuses || []).map((name) => `<option ${record && record.status === name ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>
+      <label>เวลาเข้า (เช่น 08:10)<input name="checkIn" value="${attr(record ? record.checkIn : '')}" maxlength="5"></label>
+      <label>เวลาออก<input name="checkOut" value="${attr(record ? record.checkOut : '')}" maxlength="5"></label>
+      <label class="wide">หมายเหตุ<input name="note" value="${attr(record ? record.note : '')}" maxlength="200"></label>
+      <p class="form-error wide" data-error></p>
+      <div class="form-actions wide">${record ? '<button type="button" class="ghost-button danger" data-remove>ลบการลงเวลา</button>' : ''}
+        <button type="button" class="secondary-button" data-cancel>ยกเลิก</button><button type="submit" class="primary-button">บันทึก</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    const remove = body.querySelector('[data-remove]');
+    if (remove) remove.addEventListener('click', async () => {
+      if (!confirm('ลบการลงเวลาวันนี้ของบุคลากรคนนี้?')) return;
+      const result = await App.call('checkin.remove', { personnelId, checkDate: day });
+      if (result.ok) { App.closeModal(); loadReport(); }
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const result = await App.call('checkin.manual', { personnelId, checkDate: day, status: form.elements.status.value, checkIn: form.elements.checkIn.value.trim(),
+        checkOut: form.elements.checkOut.value.trim(), note: form.elements.note.value }, { quiet: true });
+      if (!result.ok) { form.querySelector('[data-error]').textContent = App.messageOf(result.error); return; }
+      App.closeModal(); App.toast('บันทึกแล้ว', 'success'); loadReport();
+    });
+  }
+
+  async function openConfig() {
+    const response = await App.call('checkin.config');
+    if (!response.ok) return;
+    const c = response.data;
+    const body = App.openModal('ตั้งค่าการลงเวลามาทำงาน', `<form class="form-grid" novalidate>
+      <label>เวลาเข้างาน<input name="startTime" value="${attr(c.startTime)}" maxlength="5"><small class="field-error" data-error-for="startTime"></small></label>
+      <label>มาหลังเวลานี้ถือว่าสาย<input name="lateTime" value="${attr(c.lateTime)}" maxlength="5"><small class="field-error" data-error-for="lateTime"></small></label>
+      <label>เวลาเลิกงาน<input name="endTime" value="${attr(c.endTime)}" maxlength="5"><small class="field-error" data-error-for="endTime"></small></label>
+      <label class="wide check-row"><input type="checkbox" name="useGps" ${c.useGps ? 'checked' : ''}> ตรวจตำแหน่ง GPS (ลงเวลาได้เฉพาะในรัศมีของโรงเรียน)</label>
+      <label>ละติจูดโรงเรียน<input name="latitude" value="${attr(c.latitude)}"><small class="field-error" data-error-for="latitude"></small></label>
+      <label>ลองจิจูดโรงเรียน<input name="longitude" value="${attr(c.longitude)}"></label>
+      <label>รัศมี (เมตร)<input name="radius" type="number" min="20" max="5000" value="${attr(c.radius)}"><small class="field-error" data-error-for="radius"></small></label>
+      <div class="wide"><button type="button" class="ghost-button" data-here><i class="fa-solid fa-location-crosshairs"></i> ใช้ตำแหน่งปัจจุบันเป็นพิกัดโรงเรียน</button>
+        <p class="muted"><small>พิกัดโรงเรียนใช้เป็นจุดกึ่งกลางของแผนที่บ้านนักเรียนและแผนที่ความปลอดภัยด้วย</small></p></div>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button><button type="submit" class="primary-button">บันทึก</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    body.querySelector('[data-here]').addEventListener('click', async () => {
+      const place = await position();
+      if (place.latitude === undefined) return App.toast('ไม่สามารถระบุตำแหน่งได้', 'error');
+      form.elements.latitude.value = place.latitude.toFixed(6); form.elements.longitude.value = place.longitude.toFixed(6);
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const result = await App.call('checkin.saveConfig', { startTime: form.elements.startTime.value.trim(), lateTime: form.elements.lateTime.value.trim(),
+        endTime: form.elements.endTime.value.trim(), useGps: form.elements.useGps.checked, latitude: form.elements.latitude.value.trim(),
+        longitude: form.elements.longitude.value.trim(), radius: form.elements.radius.value }, { quiet: true });
+      if (!result.ok) { App.showErrors(form, result.error); App.toast(result.error.message, 'error'); return; }
+      App.closeModal(); App.toast('บันทึกการตั้งค่าแล้ว', 'success');
+    });
+  }
+
+  // ---------- นักเรียนเวลาเรียนไม่ถึง 80% ----------
+  const risk = { homeroomId: '', threshold: 80 };
+  App.register('#/attendance-risk', () => {
+    const yearId = App.yearIdOrActive();
+    App.content(`<section class="panel no-print"><div class="toolbar">
+        <label>ปีการศึกษา/ภาคเรียน<select data-year>${App.yearOptions(yearId)}</select></label>
+        <label>ห้องเรียน<select data-room>${App.options('homerooms', risk.homeroomId, { yearId, empty: 'ทุกห้อง' })}</select></label>
+        <label>เกณฑ์ (%)<input type="number" min="1" max="100" data-threshold value="${attr(risk.threshold)}"></label>
+        <div class="actions"><button type="button" class="primary-button" data-load>แสดง</button></div></div>
+        <p class="muted">คิดจากการเช็กชื่อรายคาบตั้งแต่วันเปิดภาคเรียนถึงวันนี้ · ร้อยละ = (มา + สาย) ÷ คาบที่บันทึกทั้งหมด · ทั้งโรงเรียนอาจใช้เวลา 5–20 วินาที</p></section>
+      <div id="risk-report"></div>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; risk.homeroomId = ''; App.route(); });
+    root.querySelector('[data-room]').addEventListener('change', (event) => { risk.homeroomId = event.target.value; });
+    root.querySelector('[data-threshold]').addEventListener('change', (event) => { risk.threshold = event.target.value; });
+    root.querySelector('[data-load]').addEventListener('click', async () => {
+      const response = await App.call('attendance.riskList', { academicYearId: App.yearIdOrActive(), homeroomId: risk.homeroomId, threshold: risk.threshold });
+      if (!response.ok) return;
+      const d = response.data;
+      const header = ['ห้อง', 'เลขที่', 'เลขประจำตัว', 'ชื่อ-สกุล', 'มา', 'สาย', 'ลา', 'ขาด', 'รวมคาบ', 'ร้อยละ'];
+      const values = d.rows.map((row) => [row.room, row.number, row.code, row.name, row.P, row.L, row.E, row.A, row.total, row.rate]);
+      document.getElementById('risk-report').innerHTML = `<section class="panel print-sheet"><div class="panel-head"><div>
+          <h2>นักเรียนที่มีเวลาเรียนต่ำกว่าร้อยละ ${esc(d.threshold)}</h2><p>${App.fmtDate(d.from)} – ${App.fmtDate(d.to)} · พบ ${App.num(d.rows.length)} คน</p></div>
+          <div class="actions no-print"><button type="button" class="secondary-button" data-csv>ส่งออก CSV</button><button type="button" class="secondary-button" onclick="window.print()">พิมพ์</button></div></div>
+        ${App.simpleTable(header, values, (row) => row[9] < 60 ? 'style="background:#fee2e2"' : 'style="background:#fff7ed"')}</section>`;
+      document.querySelector('[data-csv]').addEventListener('click', () => App.downloadCsv('เวลาเรียนต่ำกว่าเกณฑ์.csv', header, values));
+    });
+  });
+
+  // ---------- ประวัติการมาเรียนรายคน ----------
+  const STATUS_NAME = { P: 'มา', L: 'สาย', E: 'ลา', A: 'ขาด' };
+  App.register('#/attendance-history', () => {
+    const yearId = App.yearIdOrActive();
+    App.content(`<section class="panel no-print"><div class="toolbar">
+        <label>ปีการศึกษา/ภาคเรียน<select data-year>${App.yearOptions(yearId)}</select></label>
+        <label class="grow">นักเรียน<select data-student>${App.options('students', '', { empty: '— เลือกนักเรียน —' })}</select></label>
+        <div class="actions"><button type="button" class="primary-button" data-load>แสดง</button></div></div></section><div id="history-report"></div>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; });
+    root.querySelector('[data-load]').addEventListener('click', async () => {
+      const studentId = root.querySelector('[data-student]').value;
+      if (!studentId) return App.toast('กรุณาเลือกนักเรียน', 'error');
+      const response = await App.call('attendance.studentHistory', { academicYearId: App.yearIdOrActive(), studentId });
+      if (!response.ok) return;
+      const d = response.data;
+      document.getElementById('history-report').innerHTML = `<section class="stat-grid">
+          ${App.statCard('green', 'มา', d.totals.P, 'fa-check', 'คาบ')}${App.statCard('amber', 'สาย', d.totals.L, 'fa-clock', 'คาบ')}
+          ${App.statCard('blue', 'ลา', d.totals.E, 'fa-envelope', 'คาบ')}${App.statCard('purple', 'ขาด', d.totals.A, 'fa-user-xmark', 'คาบ')}</section>
+        <section class="panel print-sheet"><div class="panel-head"><div><h2>${esc(d.student.name || '')} (${esc(d.student.code || '')}) ห้อง ${esc(App.label('homerooms', d.homeroomId))} เลขที่ ${esc(d.number)}</h2>
+          <p>${App.fmtDate(d.from)} – ${App.fmtDate(d.to)} · บันทึก ${d.total} คาบ · มาเรียนร้อยละ <b class="${d.rate !== null && d.rate < 80 ? 'c-rose' : 'c-green'}">${d.rate ?? '-'}</b></p></div>
+          <div class="actions no-print"><button type="button" class="secondary-button" onclick="window.print()">พิมพ์</button></div></div>
+          <h3>วันที่ไม่ได้มาเรียนตามปกติ</h3>
+          ${App.simpleTable(['วันที่', 'คาบ', 'รายวิชา', 'สถานะ', 'หมายเหตุ'], d.entries.map((row) => [App.fmtDate(row.date), row.period, row.subjectName, STATUS_NAME[row.status], row.note]))}</section>`;
+    });
+  });
+
+  // ---------- ขอลา / ไปราชการ (#/leave-requests ใช้หน้าตารางกลาง) ----------
+  // ครูกรอกฟอร์ม -> ระบบสร้าง "ใบลา" (PDF ตามแบบใบลาของทางราชการ) แนบกับรายการ แล้วแจ้ง ผอ. ทาง Telegram พร้อมปุ่มเปิดใบลา
+  // ผอ. เปิดลิงก์ -> หน้าต่างพิจารณาใบลา -> อนุมัติ/ไม่อนุมัติ (ใบลาถูกสร้างใหม่พร้อมคำสั่งและลายเซ็นผู้อนุมัติ)
+  const LEAVE_PENDING = 'รออนุมัติ';
+  const TD = (value) => String(value ?? '').replace(/[0-9]/g, (digit) => '๐๑๒๓๔๕๖๗๘๙'[digit]);
+  const MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  const longDate = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? TD(Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + ' ' + (Number(m[1]) + 543)) : '....................'; };
+  const dot = (text, size) => text ? App.esc(TD(text)) : '.'.repeat(size || 20);
+  const GENERAL = ['ลาป่วย', 'ลากิจส่วนตัว', 'ลาคลอดบุตร'];
+
+  let pdfLibs = null;
+  function loadPdfLibs() {
+    if (window.html2canvas && window.jspdf) return Promise.resolve();
+    if (pdfLibs) return pdfLibs;
+    const load = (src) => new Promise((resolve, reject) => {
+      const script = Object.assign(document.createElement('script'), { src, onload: resolve, onerror: () => reject(new Error('โหลดเครื่องมือสร้าง PDF ไม่สำเร็จ')) });
+      document.head.appendChild(script);
+    });
+    pdfLibs = Promise.all([load('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'),
+      load('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')]).catch((error) => { pdfLibs = null; throw error; });
+    return pdfLibs;
+  }
+
+  const box = (on) => `<span class="lf-box${on ? ' on' : ''}"></span>`;
+
+  // แบบใบลาป่วย ลาคลอดบุตร ลากิจส่วนตัว / แบบใบลาพักผ่อน / บันทึกขออนุญาตไปราชการ
+  function leaveFormHtml(leave, info, decision) {
+    const esc = App.esc;
+    const type = leave.leaveType || 'ลากิจส่วนตัว';
+    const general = GENERAL.includes(type);
+    const official = /ไปราชการ/.test(type);
+    const title = general ? 'แบบใบลาป่วย ลาคลอดบุตร ลากิจส่วนตัว' : type === 'ลาพักผ่อน' ? 'แบบใบลาพักผ่อน' : official ? 'บันทึกขออนุญาตไปราชการ' : 'แบบใบลา';
+    const school = info.schoolName || '';
+    const today = App.todayIso();
+    const stats = (general ? GENERAL : [type]).map((kind) => {
+      const before = Number(info.stats[kind] || 0);
+      const now = kind === type ? Number(leave.days || 0) : 0;
+      return `<tr><td>${esc(kind.replace(/^ลา/, ''))}</td><td>${TD(before)}</td><td>${TD(now)}</td><td>${TD(before + now)}</td></tr>`;
+    }).join('');
+    const decided = decision === 'อนุมัติ' || decision === 'ไม่อนุมัติ';
+    const approved = decision === 'อนุมัติ';
+    const lastLine = official ? '' : `<p>ข้าพเจ้าได้${esc(type)}ครั้งสุดท้ายตั้งแต่วันที่ ${info.last ? longDate(info.last.fromDate) : '....................'} ถึงวันที่ ${info.last ? longDate(info.last.toDate || info.last.fromDate) : '....................'} มีกำหนด ${info.last ? TD(info.last.days || 0) : '.....'} วัน</p>`;
+    const leftBottom = official
+      ? '<p class="lf-head">หมายเหตุ</p><p>เมื่อได้รับอนุญาต ระบบบันทึกสถานะ “ไปราชการ” ในรายงานการมาทำงานให้อัตโนมัติ</p>'
+      : `<p class="lf-head">สถิติการลาในปีงบประมาณ ${TD(info.fiscalYear)}</p>
+          <table><thead><tr><th>ประเภทลา</th><th>ลามาแล้ว<br>(วันทำการ)</th><th>ลาครั้งนี้<br>(วันทำการ)</th><th>รวมเป็น<br>(วันทำการ)</th></tr></thead><tbody>${stats}</tbody></table>
+          <p class="lf-small">(ลงชื่อ)................................ผู้ตรวจสอบ<br>ตำแหน่ง........................................<br>วันที่...........................................</p>`;
+    return `<div class="leave-form">
+      <h3>${esc(title)}</h3>
+      <p class="lf-right">เขียนที่ ${esc(school)}</p>
+      <p class="lf-right">วันที่ ${longDate(leave.createdAt ? String(leave.createdAt).slice(0, 10) : today)}</p>
+      <p>เรื่อง&nbsp;&nbsp;ขอ${esc(official ? 'อนุญาตไปราชการ' : type)}</p>
+      <p>เรียน&nbsp;&nbsp;ผู้อำนวยการ${esc(school)}</p>
+      <p class="lf-indent">ข้าพเจ้า ${esc(info.name)} ตำแหน่ง ${dot(info.position, 24)} สังกัด ${esc(school)}${info.affiliation ? ' ' + esc(TD(info.affiliation)) : ''}</p>
+      ${general ? `<p class="lf-indent">ขอ ${GENERAL.map((kind) => `${box(kind === type)} ${esc(kind)}`).join('&nbsp;&nbsp;&nbsp;')}</p>` : ''}
+      <p${general ? '' : ' class="lf-indent"'}>${general ? '' : official ? 'ขออนุญาตไปราชการ/อบรม ' : 'ขอ' + esc(type) + ' '}เนื่องจาก ${esc(TD(leave.reason || ''))}</p>
+      <p>ตั้งแต่วันที่ ${longDate(leave.fromDate)} ถึงวันที่ ${longDate(leave.toDate || leave.fromDate)} มีกำหนด ${TD(leave.days || 0)} วัน (วันทำการ)</p>
+      ${lastLine}
+      <p>ในระหว่าง${official ? 'ไปราชการ' : 'ลา'}จะติดต่อข้าพเจ้าได้ที่ ${dot(leave.contact, 40)}</p>
+      <div class="lf-sign">ขอแสดงความนับถือ
+        <div class="lf-sig">(ลงชื่อ) ${info.applicantSignature ? `<img src="${info.applicantSignature}" alt="">` : '<span class="lf-line"></span>'}</div>
+        (${esc(info.name)})</div>
+      <div class="lf-bottom">
+        <div>${leftBottom}</div>
+        <div><p class="lf-head">ความเห็นผู้บังคับบัญชา</p><p>${decided && leave.approverNote ? esc(TD(leave.approverNote)) : '.................................................................'}</p>
+          <p class="lf-head">คำสั่ง</p><p>${box(decided && approved)} อนุญาต&nbsp;&nbsp;&nbsp;${box(decided && !approved)} ไม่อนุญาต</p>
+          <div class="lf-sig">(ลงชื่อ) ${decided && info.approverSignature ? `<img src="${info.approverSignature}" alt="">` : '<span class="lf-line"></span>'}</div>
+          <p class="lf-center">(${esc(decided ? info.approverName : info.directorName || '...................................')})<br>ตำแหน่ง ผู้อำนวยการ${esc(school)}<br>วันที่ ${decided ? longDate(today) : '...........................'}</p></div>
+      </div></div>`;
+  }
+
+  // สร้าง PDF หนึ่งหน้า A4 แล้วอัปโหลดแนบกับใบลา คืนรหัสไฟล์
+  async function buildLeavePdf(leave, decision) {
+    const info = await App.call('leave.formData', { personnelId: leave.personnelId, fromDate: leave.fromDate, leaveType: leave.leaveType,
+      excludeId: leave.id || '', withApprover: !!decision }, { quiet: true });
+    if (!info.ok) throw new Error(info.error.message);
+    await loadPdfLibs();
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+    const host = document.createElement('div');
+    host.className = 'leave-capture';
+    host.innerHTML = leaveFormHtml(leave, info.data, decision);
+    document.body.appendChild(host);
+    try {
+      await Promise.all([...host.querySelectorAll('img')].map((img) => img.complete ? null : new Promise((resolve) => { img.onload = img.onerror = resolve; })));
+      const page = host.querySelector('.leave-form');
+      let size = 17;
+      while (page.scrollHeight > page.clientHeight + 1 && size > 13) { size -= 0.5; page.style.fontSize = size + 'px'; }
+      const canvas = await window.html2canvas(page, { scale: 2, backgroundColor: '#ffffff', logging: false });
+      const doc = new window.jspdf.jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
+      doc.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, 210, 297);
+      const base64 = doc.output('datauristring').split(',')[1];
+      const upload = await App.call('file.upload', { entity: 'leave-requests', name: 'ใบลา_' + info.data.name.replace(/\s+/g, '_') + '.pdf',
+        mimeType: 'application/pdf', base64 });
+      if (!upload.ok) throw new Error(upload.error.message);
+      return upload.data.fileId;
+    } finally { host.remove(); }
+  }
+  App.leaveFormHtml = leaveFormHtml;
+
+  // ก่อนบันทึกจากฟอร์ม: สร้างใบลา PDF แนบไปด้วย (สร้างไม่ได้ก็ยังบันทึกได้)
+  App.entityBeforeSave['leave-requests'] = async (payload, row) => {
+    App.toast('กำลังสร้างใบลา (PDF)…', 'info');
+    try {
+      const decision = App.can('leave.approve') && payload.status && payload.status !== LEAVE_PENDING ? payload.status : '';
+      payload.formFileId = await buildLeavePdf(Object.assign({}, row || {}, payload), decision);
+    } catch (error) {
+      App.toast('สร้างใบลา PDF ไม่สำเร็จ (' + error.message + ') ระบบจะบันทึกโดยไม่มีใบลา', 'error');
+    }
+    return true;
+  };
+
+  App.entityDefaults['leave-requests'] = () => ({ personnelId: (App.state.user && App.state.user.personnelId) || '', status: LEAVE_PENDING,
+    fromDate: App.todayIso(), toDate: App.todayIso() });
+
+  async function decideLeave(row, status, note) {
+    App.toast('กำลังสร้างใบลาพร้อมคำสั่ง…', 'info');
+    const next = Object.assign({}, row, { status, approverNote: note ?? row.approverNote ?? '' });
+    try { next.formFileId = await buildLeavePdf(next, status); } catch (error) { App.toast('สร้างใบลา PDF ไม่สำเร็จ: ' + error.message, 'error'); }
+    const response = await App.call('entity.save', { entity: 'leave-requests', id: row.id, version: row.version, values: next });
+    if (!response.ok) return false;
+    App.toast(status === 'อนุมัติ' ? 'อนุมัติแล้ว บันทึกในรายงานการมาทำงานให้อัตโนมัติ' : 'บันทึกว่าไม่อนุมัติแล้ว', 'success');
+    App.forget('entity:leave-requests:');
+    return true;
+  }
+
+  // หน้าต่างพิจารณาใบลา (ปุ่มดู/พิจารณา หรือเปิดจากลิงก์ในการแจ้งเตือน)
+  App.entityOpen['leave-requests'] = (row, done) => {
+    if (!row) return;
+    const esc = App.esc;
+    const canDecide = App.can('leave.approve');
+    const person = App.label('personnel', row.personnelId);
+    const tone = row.status === 'อนุมัติ' ? 'success' : row.status === 'ไม่อนุมัติ' ? 'danger' : 'warning';
+    const body = App.openModal('ใบลา: ' + person, `<div class="leave-review">
+      <table class="data-table">
+        <tr><th>ผู้ขอ</th><td>${esc(person)}</td></tr><tr><th>ประเภท</th><td>${esc(row.leaveType)}</td></tr>
+        <tr><th>วันที่</th><td>${App.fmtDate(row.fromDate)}${row.toDate && row.toDate !== row.fromDate ? ' – ' + App.fmtDate(row.toDate) : ''} (${App.num(row.days)} วันทำการ)</td></tr>
+        <tr><th>เหตุผล</th><td style="white-space:pre-line">${esc(row.reason)}</td></tr>
+        ${row.contact ? `<tr><th>ติดต่อได้ที่</th><td>${esc(row.contact)}</td></tr>` : ''}
+        <tr><th>สถานะ</th><td><span class="badge ${tone}">${esc(row.status)}</span>${row.approvedBy ? ' โดย ' + esc(row.approvedBy) : ''}
+          ${row.approverNote ? '<br><small>' + esc(row.approverNote) + '</small>' : ''}</td></tr></table>
+      <div class="form-actions" style="justify-content:flex-start;flex-wrap:wrap">
+        ${row.formFileId ? `<button type="button" class="secondary-button" data-file="${App.attr(row.formFileId)}"><i class="fa-regular fa-file-pdf"></i> เปิดใบลา (PDF)</button>` : ''}
+        ${row.fileId ? `<button type="button" class="secondary-button" data-file="${App.attr(row.fileId)}"><i class="fa-solid fa-paperclip"></i> เอกสารประกอบ</button>` : ''}</div>
+      ${canDecide ? `<label style="margin-top:12px;display:grid;gap:4px">ความเห็นผู้บังคับบัญชา<textarea data-note rows="3" maxlength="1000">${esc(row.approverNote || '')}</textarea></label>
+        <div class="form-actions"><button type="button" class="danger-button" data-decide="ไม่อนุมัติ"><i class="fa-solid fa-xmark"></i> ไม่อนุมัติ</button>
+          <button type="button" class="primary-button" data-decide="อนุมัติ"><i class="fa-solid fa-check"></i> อนุมัติ</button></div>` : ''}
+    </div>`);
+    body.querySelectorAll('[data-file]').forEach((button) => button.addEventListener('click', () => App.openFile(button.dataset.file)));
+    body.querySelectorAll('[data-decide]').forEach((button) => button.addEventListener('click', async () => {
+      body.querySelectorAll('[data-decide]').forEach((item) => { item.disabled = true; });
+      const saved = await decideLeave(row, button.dataset.decide, body.querySelector('[data-note]').value.trim());
+      if (!saved) { body.querySelectorAll('[data-decide]').forEach((item) => { item.disabled = false; }); return; }
+      App.closeModal();
+      if (done) done(); else App.route();
+    }));
+  };
+
+  App.entityActions['leave-requests'] = [
+    { label: 'พิจารณา', icon: 'fa-gavel', permission: 'leave.approve', handler: (row) => App.entityOpen['leave-requests'](row) }
+  ];
+})();
+</script>

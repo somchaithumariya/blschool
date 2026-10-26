@@ -1,0 +1,70 @@
+<script>
+/**
+ * ป้องกันการดูและคัดลอกโค้ดหน้าเว็บแบบทั่วไป: ปิดเมนูคลิกขวาและปุ่มลัดเปิดโค้ด (F12, Ctrl+U, Ctrl+Shift+I ฯลฯ)
+ * ยังคลิกขวาในช่องกรอกข้อมูลได้ และ Ctrl+C / Ctrl+V / Ctrl+P / Ctrl+F ใช้ได้ตามปกติ
+ * ใช้ร่วมกับทุกหน้า (ระบบหลัก ห้องรับฟัง แบบสอบถาม SWOT หน้าขอใช้ระบบ)
+ */
+(function () {
+  'use strict';
+  if (window.__sourceGuard) return;
+  window.__sourceGuard = true;
+
+  var NOTICE = 'ระบบนี้สงวนลิขสิทธิ์ ไม่อนุญาตให้ดูหรือคัดลอกโค้ด';
+  var EDITABLE = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
+  var timer = null;
+
+  function editable(target) {
+    return !!(target && target.closest && target.closest(EDITABLE));
+  }
+
+  function notice() {
+    var node = document.getElementById('source-guard-notice');
+    if (!node) {
+      node = document.createElement('div');
+      node.id = 'source-guard-notice';
+      node.setAttribute('role', 'status');
+      node.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;max-width:calc(100% - 32px);' +
+        'padding:10px 16px;border-radius:999px;background:rgba(17,24,39,.92);color:#fff;font:500 14px/1.4 Sarabun,Tahoma,sans-serif;' +
+        'box-shadow:0 6px 20px rgba(0,0,0,.25);pointer-events:none;transition:opacity .2s;text-align:center';
+      node.textContent = '🔒 ' + NOTICE;
+      (document.body || document.documentElement).appendChild(node);
+    }
+    node.style.opacity = '1';
+    clearTimeout(timer);
+    timer = setTimeout(function () { node.style.opacity = '0'; }, 1800);
+  }
+
+  function blocked(event) {
+    var key = String(event.key || '').toLowerCase();
+    var ctrl = event.ctrlKey || event.metaKey;
+    if (key === 'f12') return true;
+    if (ctrl && !event.shiftKey && !event.altKey && (key === 'u' || key === 's')) return true;
+    // Ctrl+Shift+I/J/C/K (Chrome/Edge/Firefox) และ Cmd+Option+I/J/C/U (Mac)
+    if (ctrl && (event.shiftKey || event.altKey) && ['i', 'j', 'c', 'k', 'u'].indexOf(key) !== -1) return true;
+    return false;
+  }
+
+  document.addEventListener('contextmenu', function (event) {
+    if (editable(event.target)) return;
+    event.preventDefault();
+    notice();
+  }, true);
+
+  document.addEventListener('keydown', function (event) {
+    if (!blocked(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    notice();
+  }, true);
+
+  // ลากรูปหรือข้อความออกไปวางที่อื่นไม่ได้ (ยกเว้นช่องกรอกข้อมูลและพื้นที่ลากวางไฟล์)
+  document.addEventListener('dragstart', function (event) {
+    if (editable(event.target) || (event.target.closest && event.target.closest('[draggable="true"]'))) return;
+    if (event.target && event.target.tagName === 'IMG') event.preventDefault();
+  }, true);
+
+  try {
+    console.log('%c' + NOTICE, 'color:#b91c1c;font:700 16px Sarabun,Tahoma,sans-serif');
+  } catch (error) { /* ไม่มี console */ }
+})();
+</script>

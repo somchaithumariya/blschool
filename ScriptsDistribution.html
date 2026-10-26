@@ -1,0 +1,98 @@
+<script>
+/**
+ * โรงเรียนที่ขอใช้ระบบ (#/distribution) — เฉพาะผู้ดูแลระบบกลาง (โรงเรียนหลัก)
+ * ดูคำขอพร้อมหนังสือที่ลงนามแล้ว ติดตั้ง/ระงับ/เปิดใช้ ส่งรหัสผ่านใหม่ให้ผู้ดูแลของโรงเรียน และตั้งค่าการรับคำขอ
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+  const TONE = { active: 'success', pending: 'warning', installing: 'info', failed: 'danger', suspended: 'danger', rejected: 'info' };
+
+  App.register('#/distribution', async () => {
+    const response = await App.call('distribution.list');
+    if (!response.ok) return App.renderError(response.error);
+    const d = response.data;
+    const count = (status) => d.items.filter((item) => item.status === status).length;
+    const cfg = d.config;
+    App.content(`<section class="panel">
+        <div class="panel-head"><div><h2><i class="fa-solid fa-share-nodes c-teal"></i> โรงเรียนที่ขอใช้ระบบ</h2>
+          <p>ส่งลิงก์หน้าขอใช้ระบบให้โรงเรียนอื่น ผู้อำนวยการกรอกข้อมูลและลงนามหนังสือ ระบบส่งหนังสือ (PDF) มาที่ ${esc(cfg.ownerEmail)} บันทึกลงชีตทะเบียน
+            แล้ว${cfg.autoApprove ? 'ติดตั้งให้อัตโนมัติ' : 'รอท่านกด “ติดตั้ง”'} และส่งลิงก์ ชื่อผู้ใช้ รหัสผ่านสุ่มไปที่อีเมลผู้ดูแลของโรงเรียน</p></div>
+          <div class="actions">
+            <button type="button" class="primary-button" data-copy><i class="fa-regular fa-copy"></i> คัดลอกลิงก์หน้าขอใช้ระบบ</button>
+            <a class="secondary-button" href="${attr(d.registerUrl)}" target="_blank" rel="noopener"><i class="fa-solid fa-arrow-up-right-from-square"></i> เปิดหน้าขอใช้ระบบ</a>
+            <a class="secondary-button" href="${attr(d.registryUrl)}" target="_blank" rel="noopener"><i class="fa-solid fa-table"></i> ชีตทะเบียน</a>
+            <button type="button" class="icon-button" data-reload title="โหลดใหม่" aria-label="โหลดใหม่"><i class="fa-solid fa-rotate"></i></button></div></div>
+        <p class="muted" style="margin:0 0 10px">ลิงก์: <code>${esc(d.registerUrl)}</code></p>
+        <div class="chip-list" style="margin-bottom:12px">
+          <span class="chip">ทั้งหมด ${App.num(d.items.length)}</span><span class="chip">ใช้งาน ${App.num(count('active'))}</span>
+          <span class="chip">รอติดตั้ง ${App.num(count('pending'))}</span><span class="chip">ติดตั้งไม่สำเร็จ ${App.num(count('failed'))}</span>
+          <span class="chip">ระงับ ${App.num(count('suspended'))}</span></div>
+        <div class="table-wrap"><table class="data-table"><thead><tr><th>คำขอ</th><th>โรงเรียน</th><th>ผู้ดูแลระบบของโรงเรียน</th><th>สถานะ</th><th class="no-print"></th></tr></thead>
+          <tbody>${d.items.length ? d.items.map((item) => `<tr>
+            <td><strong>${esc(item.requestNo)}</strong><br><small class="muted">${App.fmtDateTime(item.createdAt)}</small></td>
+            <td><strong>${esc(item.schoolName)}</strong><br><small class="muted">จ.${esc(item.province)} · ${esc(item.affiliation)}</small><br><small>ผอ. ${esc(item.directorName)}</small></td>
+            <td>${esc(item.adminName)}<br><small class="muted">${esc(item.adminEmail)} · ${esc(item.adminPhone)}</small></td>
+            <td style="white-space:nowrap"><span class="badge ${TONE[item.status] || 'info'}">${esc(item.statusName)}</span>${item.error ? `<br><small class="c-rose">${esc(item.error)}</small>` : ''}</td>
+            <td class="actions no-print">
+              ${item.letterUrl ? `<a class="ghost-button" href="${attr(item.letterUrl)}" target="_blank" rel="noopener" title="หนังสือขอใช้ระบบ"><i class="fa-regular fa-file-pdf"></i> หนังสือ</a>` : ''}
+              ${item.systemUrl ? `<a class="ghost-button" href="${attr(item.systemUrl)}" target="_blank" rel="noopener"><i class="fa-solid fa-arrow-up-right-from-square"></i> ระบบ</a>` : ''}
+              ${item.databaseUrl ? `<a class="ghost-button" href="${attr(item.databaseUrl)}" target="_blank" rel="noopener" title="ฐานข้อมูลของโรงเรียน"><i class="fa-solid fa-database"></i></a>` : ''}
+              ${['pending', 'failed'].includes(item.status) ? `<button type="button" class="ghost-button" data-install="${attr(item.code)}"><i class="fa-solid fa-download"></i> ติดตั้ง</button>
+                <button type="button" class="ghost-button danger" data-status="rejected" data-code="${attr(item.code)}">ไม่อนุมัติ</button>` : ''}
+              ${item.status === 'rejected' ? `<button type="button" class="ghost-button" data-status="pending" data-code="${attr(item.code)}">คืนเป็นรอติดตั้ง</button>` : ''}
+              ${item.status === 'active' ? `<button type="button" class="ghost-button" data-reset="${attr(item.code)}"><i class="fa-solid fa-key"></i> ส่งรหัสผ่านใหม่</button>
+                <button type="button" class="ghost-button danger" data-status="suspended" data-code="${attr(item.code)}">ระงับ</button>` : ''}
+              ${item.status === 'suspended' ? `<button type="button" class="ghost-button" data-status="active" data-code="${attr(item.code)}">เปิดใช้งาน</button>` : ''}
+            </td></tr>`).join('') : '<tr><td colspan="5" class="empty-row">ยังไม่มีโรงเรียนขอใช้ระบบ ส่งลิงก์หน้าขอใช้ระบบให้โรงเรียนที่สนใจ</td></tr>'}</tbody></table></div>
+      </section>
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-sliders c-violet"></i> ตั้งค่าการรับคำขอ</h2>
+        <p>ข้อมูลของแต่ละโรงเรียนอยู่ในฐานข้อมูลแยกในโฟลเดอร์ “ระบบบริหารจัดการสถานศึกษา - โรงเรียนที่ขอใช้ระบบ” บน Google Drive ของท่าน</p></div></div>
+        <form class="form-grid" data-config novalidate>
+          <label>อีเมลที่รับหนังสือขอใช้ระบบ<input name="ownerEmail" type="email" value="${attr(cfg.ownerEmail)}"><small class="field-error" data-error-for="ownerEmail"></small></label>
+          <label>คำขึ้นต้นในหนังสือ (เรียน …)<input name="addressee" value="${attr(cfg.addressee)}" maxlength="160"><small class="field-error" data-error-for="addressee"></small></label>
+          <label>จำนวนคำขอสูงสุดต่อวัน<input name="dailyLimit" type="number" min="1" max="200" value="${attr(cfg.dailyLimit)}"><small class="field-error" data-error-for="dailyLimit"></small></label>
+          <label>ลิงก์ระบบ (เว้นว่าง = ${esc(d.mainUrl.slice(0, 48))}…)<input name="baseUrl" value="${attr(cfg.baseUrl || '')}" placeholder="https://script.google.com/macros/s/…/exec"><small class="field-error" data-error-for="baseUrl"></small></label>
+          <label class="check-row wide"><input type="checkbox" class="switch" name="autoApprove" ${cfg.autoApprove ? 'checked' : ''}> ติดตั้งให้อัตโนมัติทันทีที่โรงเรียนส่งหนังสือที่ลงนามแล้ว (ปิด = รอท่านตรวจหนังสือแล้วกด “ติดตั้ง”)</label>
+          <div class="form-actions wide"><button type="submit" class="primary-button"><i class="fa-solid fa-floppy-disk"></i> บันทึก</button></div>
+        </form></section>`);
+
+    const root = document.getElementById('page-content');
+    const reload = () => App.route();
+    root.querySelector('[data-reload]').addEventListener('click', reload);
+    root.querySelector('[data-copy]').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(d.registerUrl); App.toast('คัดลอกลิงก์แล้ว', 'success'); }
+      catch (error) { App.toast('คัดลอกไม่ได้ กรุณาเลือกลิงก์ด้านล่างแล้วกด Ctrl+C', 'error'); }
+    });
+    root.querySelectorAll('[data-install]').forEach((button) => button.addEventListener('click', async () => {
+      if (!confirm('ติดตั้งระบบให้โรงเรียนนี้และส่งบัญชีผู้ใช้ทางอีเมล? (ใช้เวลาประมาณ 1–2 นาที)')) return;
+      button.disabled = true;
+      const result = await App.call('distribution.install', { code: button.dataset.install });
+      if (result.ok) { App.toast('ติดตั้งแล้ว ส่งบัญชีผู้ใช้ทางอีเมลแล้ว', 'success'); reload(); } else button.disabled = false;
+    }));
+    root.querySelectorAll('[data-status]').forEach((button) => button.addEventListener('click', async () => {
+      const labels = { suspended: 'ระงับการใช้งานของโรงเรียนนี้ (ผู้ใช้ทุกคนของโรงเรียนจะเข้าระบบไม่ได้จนกว่าจะเปิดใช้)', active: 'เปิดใช้งานอีกครั้ง', rejected: 'ไม่อนุมัติคำขอนี้', pending: 'คืนสถานะเป็นรอติดตั้ง' };
+      if (!confirm(labels[button.dataset.status] + '?')) return;
+      const result = await App.call('distribution.setStatus', { code: button.dataset.code, status: button.dataset.status });
+      if (result.ok) { App.toast('เปลี่ยนสถานะเป็น “' + result.data.statusName + '” แล้ว', 'success'); reload(); }
+    }));
+    root.querySelectorAll('[data-reset]').forEach((button) => button.addEventListener('click', async () => {
+      if (!confirm('ตั้งรหัสผ่านใหม่ให้บัญชี admin ของโรงเรียนนี้ แล้วส่งไปที่อีเมลผู้ดูแลของโรงเรียน? (ท่านจะไม่เห็นรหัสผ่าน)')) return;
+      const result = await App.call('distribution.resetPassword', { code: button.dataset.reset });
+      if (result.ok) App.toast('ส่งรหัสผ่านใหม่ไปที่ ' + result.data.email + ' แล้ว', 'success');
+    }));
+    const form = root.querySelector('[data-config]');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      App.clearErrors(form);
+      const values = Object.fromEntries(new FormData(form).entries());
+      values.autoApprove = form.elements.autoApprove.checked;
+      const result = await App.call('distribution.saveConfig', values, { quiet: true });
+      if (!result.ok) { App.showErrors(form, result.error); App.toast(result.error.message, 'error'); return; }
+      App.toast('บันทึกแล้ว', 'success');
+      reload();
+    });
+  });
+})();
+</script>

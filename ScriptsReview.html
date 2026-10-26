@@ -1,0 +1,234 @@
+<script>
+/**
+ * ส่งรายงานถึงผู้บริหาร: ครูกด "ส่งผู้บริหาร" จากรายงานของตน → ผู้บริหารเปิดเอกสารแบบบันทึกข้อความ ให้ความเห็น ลงนาม/ส่งกลับแก้ไข
+ * เอกสารพิมพ์ได้ (บันทึกเป็น PDF ผ่านหน้าต่างพิมพ์) พร้อมภาพลายเซ็นจากเมนู "ลายเซ็น"
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+  const PENDING = 'รอพิจารณา';
+  const SIGNED = 'ลงนามแล้ว';
+  const RETURNED = 'ส่งกลับแก้ไข';
+  const TONE = { [PENDING]: 'warning', [SIGNED]: 'success', [RETURNED]: 'danger' };
+  const KINDS = ['dev-reports', 'lesson-plans', 'teaching-logs', 'plc', 'homeroom-logs', 'projects', 'project-reports'];
+  const SUBJECT = { 'lesson-plans': 'ขอส่งแผนการจัดการเรียนรู้', 'teaching-logs': 'รายงานบันทึกหลังการสอน', 'plc': 'รายงานการดำเนินกิจกรรมชุมชนการเรียนรู้ทางวิชาชีพ (PLC)',
+    'homeroom-logs': 'รายงานบันทึกกิจกรรมโฮมรูม', 'projects': 'ขออนุมัติโครงการ', 'project-reports': 'รายงานผลการดำเนินโครงการ' };
+  const TD = (value) => String(value ?? '').replace(/[0-9]/g, (digit) => '๐๑๒๓๔๕๖๗๘๙'[digit]);
+  const MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  const longDate = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? TD(Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + ' ' + (Number(m[1]) + 543)) : '....................'; };
+  const badge = (status) => `<span class="badge ${TONE[status] || 'info'}">${esc(status)}</span>`;
+  const ui = () => App.cached('ui:report-reviews') || App.remember('ui:report-reviews', { tab: '' });
+  // ช่องที่ไม่ต้องแสดงในเอกสาร (รหัสระบบ ไฟล์ และช่องที่แสดงที่ส่วนหัวแล้ว)
+  const SKIP = new Set(['academicYearId', 'personnelId', 'teacherId', 'scoresJson', 'memberIds']);
+
+  // ---------- ข้อความแต่ละช่องในเอกสาร ----------
+  function valueText(field, value) {
+    if (value === '' || value === null || value === undefined) return '';
+    if (field.multi) return String(value).split(',').filter(Boolean).map((id) => App.label(field.multi, id)).join(', ');
+    if (field.type === 'date') return longDate(value);
+    if (field.type === 'ref') return App.label(field.ref, value) || '';
+    if (field.type === 'year') return App.label('academicYears', value) || '';
+    if (field.type === 'checkbox') return value === true ? 'ใช่' : 'ไม่ใช่';
+    return String(value);
+  }
+
+  async function imageData(fileId) {
+    if (!fileId) return '';
+    const response = await App.call('file.get', { fileId }, { silent: true, quiet: true });
+    return response.ok && /^image\//.test(response.data.mimeType) ? `data:${response.data.mimeType};base64,${response.data.base64}` : '';
+  }
+
+  function bodyHtml(d) {
+    const r = d.record;
+    const who = `ข้าพเจ้า ${esc(d.submitter.name || '..............................')} ตำแหน่ง ${esc(TD(d.submitter.position || '..............................'))}`;
+    if (d.entity === 'dev-reports') {
+      const official = r.reportType === 'รายงานการไปราชการ';
+      const range = r.toDate && r.toDate !== r.fromDate ? `ระหว่างวันที่ ${longDate(r.fromDate)} ถึงวันที่ ${longDate(r.toDate)}` : `เมื่อวันที่ ${longDate(r.fromDate)}`;
+      const parts = [['สาระสำคัญ/ความรู้ที่ได้รับ', r.summary], ['การนำไปใช้/ขยายผล', r.application], ['ความสอดคล้องกับตัวชี้วัด/มาตรฐานตำแหน่ง', r.paIndicator]].filter(([, text]) => text);
+      return `<p class="memo-indent">ตาม${r.orderRef ? 'หนังสือ/คำสั่งที่ ' + esc(TD(r.orderRef)) + ' ' : 'ที่'}${who} ได้${official ? 'รับอนุญาตให้ไปราชการเพื่อ' : ''}เข้าร่วม${esc(r.activityType || 'กิจกรรม')}
+        เรื่อง “${esc(r.title)}”${r.organizer ? ' จัดโดย ' + esc(r.organizer) : ''}${r.location ? ' ณ ' + esc(r.location) : ''} ${range}${r.hours ? ' รวม ' + TD(r.hours) + ' ชั่วโมง' : ''}
+        บัดนี้ได้เสร็จสิ้นแล้ว จึงขอรายงานผลดังนี้</p>
+        ${parts.map(([label, text], index) => `<p class="memo-indent"><b>${TD(index + 1)}. ${esc(label)}</b></p><p class="memo-indent memo-pre">${esc(TD(text))}</p>`).join('')}`;
+    }
+    const rows = d.fields.filter((field) => !SKIP.has(field.key) && field.type !== 'file')
+      .map((field) => [field.label, valueText(field, r[field.key])]).filter(([, text]) => String(text).trim());
+    const members = d.entity === 'plc' && r.memberIds ? `<p class="memo-indent">สมาชิกกลุ่ม: ${esc(String(r.memberIds).split(',').filter(Boolean).map((id) => App.label('personnel', id)).join(', '))}</p>` : '';
+    return `<p class="memo-indent">${who} ขอ${esc(SUBJECT[d.entity].replace(/^ขอ/, ''))} รายละเอียดดังนี้</p>${members}
+      <table class="memo-table"><tbody>${rows.map(([label, text]) => `<tr><th>${esc(label)}</th><td class="memo-pre">${esc(TD(text))}</td></tr>`).join('')}</tbody></table>`;
+  }
+
+  // เอกสารแบบบันทึกข้อความ (ส่วนราชการ / ที่ / วันที่ / เรื่อง / เรียน) + ความเห็นและลายมือชื่อผู้บริหาร
+  function memoHtml(d, photos) {
+    const r = d.record;
+    const review = d.review;
+    const subject = d.entity === 'dev-reports' ? (r.reportType === 'รายงานการไปราชการ' ? 'รายงานผลการไปราชการ' : 'รายงานผลการพัฒนาตนเอง') : SUBJECT[d.entity];
+    const date = review ? String(review.submittedAt).slice(0, 10) : App.todayIso();
+    const decided = review && review.status !== PENDING;
+    const sig = (src) => src ? `<img src="${attr(src)}" alt="">` : '<span class="memo-line"></span>';
+    return `<div class="memo">
+      <div class="memo-head">${d.garuda ? `<img class="memo-garuda" src="${attr(d.garuda)}" alt="ตราครุฑ">` : '<span class="memo-garuda"></span>'}<h1>บันทึกข้อความ</h1></div>
+      <p class="memo-field"><b>ส่วนราชการ</b> <span>${esc(d.school.name)}${d.school.affiliation ? ' ' + esc(TD(d.school.affiliation)) : ''}</span></p>
+      <p class="memo-field memo-two"><span><b>ที่</b> <span>..............................</span></span><span><b>วันที่</b> <span>${longDate(date)}</span></span></p>
+      <p class="memo-field"><b>เรื่อง</b> <span>${esc(subject)}</span></p>
+      <p class="memo-to"><b>เรียน</b>&nbsp;&nbsp;ผู้อำนวยการ${esc(d.school.name)}</p>
+      ${bodyHtml(d)}
+      ${photos.length ? `<div class="memo-photos">${photos.map((src) => `<img src="${attr(src)}" alt="ภาพประกอบ">`).join('')}</div>` : ''}
+      <p class="memo-indent">จึงเรียนมาเพื่อโปรดทราบ${d.entity === 'dev-reports' ? '' : 'และพิจารณา'}</p>
+      <div class="memo-sign"><div class="memo-sig">(ลงชื่อ) ${sig(d.submitter.signature)}</div>
+        <div>(${esc(d.submitter.name || '..............................')})</div><div>ตำแหน่ง ${esc(TD(d.submitter.position || '..............................'))}</div></div>
+      <div class="memo-review"><p><b>ความเห็นของผู้บริหาร</b></p>
+        <p>${decided ? `<span class="memo-box${review.status === SIGNED ? ' on' : ''}"></span> ทราบ/เห็นชอบ&nbsp;&nbsp;&nbsp;<span class="memo-box${review.status === RETURNED ? ' on' : ''}"></span> ให้แก้ไขตามความเห็น` : '<span class="memo-box"></span> ทราบ/เห็นชอบ&nbsp;&nbsp;&nbsp;<span class="memo-box"></span> ให้แก้ไขตามความเห็น'}</p>
+        <p class="memo-pre">${decided && review.comment ? esc(TD(review.comment)) : '.....................................................................................................................................'}</p>
+        <div class="memo-sign"><div class="memo-sig">(ลงชื่อ) ${sig(decided ? d.reviewer.signature : '')}</div>
+          <div>(${esc((decided ? d.reviewer.name : d.school.directorName) || '..............................')})</div>
+          <div>${decided && d.reviewer.position ? 'ตำแหน่ง ' + esc(TD(d.reviewer.position)) : 'ผู้อำนวยการ' + esc(d.school.name)}</div>
+          <div>วันที่ ${decided ? longDate(String(review.reviewedAt).slice(0, 10)) : '..............................'}</div></div></div></div>`;
+  }
+
+  async function photosOf(d) {
+    const ids = ['photo1FileId', 'photo2FileId', 'photoFileId'].map((key) => d.record[key]).filter(Boolean).slice(0, 2);
+    return (await Promise.all(ids.map(imageData))).filter(Boolean);
+  }
+
+  // หน้าต่างพิมพ์ A4 (เลือก "บันทึกเป็น PDF" ได้) ใช้รูปแบบเดียวกับหนังสือราชการ
+  function printMemo(html) {
+    const win = window.open('', '_blank');
+    if (!win) return App.toast('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ กรุณาอนุญาตป๊อปอัป', 'error');
+    const css = [...document.styleSheets].map((sheet) => { try { return [...sheet.cssRules].map((rule) => rule.cssText).filter((text) => /\.memo/.test(text)).join('\n'); } catch (error) { return ''; } }).join('\n');
+    win.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>บันทึกข้อความ</title>
+      <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+      <style>${css}\n@page{size:A4;margin:20mm 20mm 18mm 30mm}body{margin:0}.memo{width:auto;padding:0;box-shadow:none;border:0}</style></head>
+      <body>${html}<script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)})<\/script></body></html>`);
+    win.document.close();
+  }
+
+  async function openDocument(d) {
+    App.setLoading(true);
+    const photos = await photosOf(d);
+    App.setLoading(false);
+    const html = memoHtml(d, photos);
+    const review = d.review;
+    const body = App.openModal(review ? review.title : 'ตัวอย่างเอกสาร', `<div class="rv-wrap">
+      ${review ? `<div class="rv-status">${badge(review.status)} ${review.note ? `<span class="muted">ข้อความจากผู้ส่ง: ${esc(review.note)}</span>` : ''}
+        ${review.status !== PENDING && review.reviewerName ? `<span class="muted">โดย ${esc(review.reviewerName)} · ${App.fmtDateTime(review.reviewedAt)}</span>` : ''}</div>` : ''}
+      <div class="rv-paper">${html}</div>
+      ${d.canReview ? `<form class="rv-decide" novalidate><label class="wide">ความเห็นของผู้บริหาร (แสดงในเอกสารและส่งถึงครูทางอีเมล)
+          <textarea name="comment" rows="3" maxlength="2000" placeholder="เช่น ทราบ ขอชื่นชม ให้นำความรู้ไปขยายผลในกลุ่มสาระ"></textarea>
+          <small class="field-error" data-error-for="comment"></small></label>
+        <p class="muted"><i class="fa-solid fa-signature"></i> เมื่อลงนาม ระบบใส่ภาพลายเซ็นของท่านจากเมนู “ลายเซ็น” (ถ้ามี) ลงในเอกสาร</p></form>` : ''}
+      <p class="form-error" data-form-error></p>
+      <div class="form-actions"><button type="button" class="secondary-button" data-print><i class="fa-solid fa-print"></i> พิมพ์ / บันทึก PDF</button>
+        ${d.canReopen ? '<button type="button" class="ghost-button" data-reopen><i class="fa-solid fa-rotate-left"></i> เปิดพิจารณาใหม่</button>' : ''}
+        ${d.canReview ? `<button type="button" class="secondary-button c-rose" data-decide="${RETURNED}"><i class="fa-solid fa-reply"></i> ส่งกลับแก้ไข</button>
+          <button type="button" class="primary-button" data-decide="${SIGNED}"><i class="fa-solid fa-signature"></i> ลงนาม</button>` : ''}</div></div>`);
+    body.querySelector('[data-print]').addEventListener('click', () => printMemo(html));
+    const error = body.querySelector('[data-form-error]');
+    body.querySelectorAll('[data-decide]').forEach((button) => button.addEventListener('click', async () => {
+      const form = body.querySelector('.rv-decide');
+      App.clearErrors(form);
+      const decision = button.dataset.decide;
+      if (decision === RETURNED && !form.elements.comment.value.trim()) { App.showErrors(form, { fieldErrors: { comment: 'กรุณาระบุสิ่งที่ต้องแก้ไข' } }); return; }
+      button.disabled = true;
+      const result = await App.call('review.decide', { id: review.id, version: review.version, decision, comment: form.elements.comment.value }, { quiet: true });
+      button.disabled = false;
+      if (!result.ok) { App.showErrors(form, result.error); error.textContent = App.messageOf(result.error); return; }
+      App.toast(decision === SIGNED ? 'ลงนามแล้ว' + (result.data.mailed ? ' และส่งอีเมลแจ้งครูแล้ว' : '') : 'ส่งกลับให้แก้ไขแล้ว' + (result.data.mailed ? ' (แจ้งทางอีเมลแล้ว)' : ''), 'success');
+      await App.route();
+      openReview(review.id);
+    }));
+    const reopen = body.querySelector('[data-reopen]');
+    if (reopen) reopen.addEventListener('click', async () => {
+      if (!confirm('เปิดรายงานนี้ให้พิจารณาใหม่?')) return;
+      const result = await App.call('review.reopen', { id: review.id });
+      if (result.ok) { App.toast('เปิดพิจารณาใหม่แล้ว', 'success'); await App.route(); openReview(review.id); }
+    });
+  }
+
+  async function openReview(id) {
+    const response = await App.call('review.get', { id });
+    if (response.ok) openDocument(response.data);
+  }
+
+  async function previewRecord(entity, row) {
+    const response = await App.call('review.preview', { entity, id: row.id });
+    if (response.ok) openDocument(response.data);
+  }
+
+  // ---------- ครู: ส่งรายงานให้ผู้บริหาร ----------
+  async function openSubmit(entity, row) {
+    if (!row || !row.id) return App.toast('กรุณาบันทึกรายงานก่อนส่ง', 'error');
+    const status = await App.call('review.statusOf', { entity }, { silent: true, quiet: true });
+    const current = status.ok ? status.data[row.id] : null;
+    if (current && current.status !== RETURNED) {
+      App.toast(current.status === PENDING ? 'ส่งรายงานนี้แล้ว รอผู้บริหารพิจารณา' : 'ผู้บริหารลงนามรายงานนี้แล้ว', 'info');
+      return openReview(current.id);
+    }
+    const body = App.openModal('ส่งรายงานถึงผู้บริหาร', `<form class="form-grid" novalidate>
+      <p class="wide">ระบบจะแจ้งผู้บริหารทันทีทาง Telegram/LINE และอีเมล ผู้บริหารเปิดเอกสารแบบบันทึกข้อความ ให้ความเห็น แล้วลงนามหรือส่งกลับแก้ไข · ผลจะส่งกลับทางอีเมลของคุณ</p>
+      ${current ? '<p class="wide notice">รายงานนี้เคยถูกส่งกลับให้แก้ไข การส่งครั้งนี้จะเป็นการส่งใหม่</p>' : ''}
+      <label class="wide">ข้อความถึงผู้บริหาร (ถ้ามี)<textarea name="note" rows="2" maxlength="500"></textarea></label>
+      <p class="form-error wide" data-form-error></p>
+      <div class="form-actions wide"><button type="button" class="ghost-button" data-preview><i class="fa-regular fa-eye"></i> ดูเอกสารก่อนส่ง</button>
+        <button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="submit" class="primary-button"><i class="fa-solid fa-paper-plane"></i> ส่งผู้บริหาร</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    body.querySelector('[data-preview]').addEventListener('click', () => previewRecord(entity, row));
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = form.querySelector('[type=submit]');
+      button.disabled = true;
+      const result = await App.call('review.submit', { entity, id: row.id, note: form.elements.note.value }, { quiet: true });
+      button.disabled = false;
+      if (!result.ok) { form.querySelector('[data-form-error]').textContent = App.messageOf(result.error); return; }
+      App.closeModal();
+      App.toast('ส่งผู้บริหารแล้ว' + (result.data.mailed ? ' (แจ้งทางอีเมลแล้ว)' : '') + ' ติดตามผลที่เมนู “ส่งรายงานถึงผู้บริหาร”', 'success');
+    });
+  }
+  App.openReviewSubmit = openSubmit;
+
+  KINDS.forEach((entity) => {
+    const actions = App.entityActions[entity] = App.entityActions[entity] || [];
+    actions.push({ label: 'ส่งผู้บริหาร', icon: 'fa-paper-plane', handler: (row) => openSubmit(entity, row) });
+    if (entity === 'dev-reports' || entity === 'lesson-plans') actions.push({ label: 'พิมพ์บันทึกข้อความ', icon: 'fa-print', handler: (row) => previewRecord(entity, row) });
+  });
+  App.entityDefaults['dev-reports'] = () => ({ personnelId: (App.state.user && App.state.user.personnelId) || '', reportType: 'รายงานการพัฒนาตนเอง',
+    fromDate: App.todayIso(), academicYearId: App.state.yearId });
+  App.entityAfter['dev-reports'] = (container) => {
+    container.innerHTML = `<section class="panel no-print"><p class="muted"><i class="fa-solid fa-circle-info"></i> กด “เพิ่มข้อมูล” เลือกประเภท (ไปราชการ หรือ พัฒนาตนเอง: ประชุม อบรม ศึกษาดูงาน)
+      เขียนสาระสำคัญและการนำไปใช้ แนบรูปได้ 2 ใบและไฟล์รายงาน/เกียรติบัตร 1 ไฟล์ แล้วกด “ส่งผู้บริหาร” ในแถว · “พิมพ์บันทึกข้อความ” พิมพ์หรือบันทึกเป็น PDF ได้ทันที</p></section>`;
+  };
+
+  // ---------- หน้า "ส่งรายงานถึงผู้บริหาร" ----------
+  App.register('#/report-reviews', async () => {
+    const response = await App.call('review.list', { academicYearId: App.state.yearId });
+    if (!response.ok) return App.renderError(response.error);
+    const data = response.data;
+    const state = ui();
+    const tabs = [['mine', 'รายงานของฉัน', data.mine.length]];
+    if (data.canReview) { tabs.unshift(['pending', 'รอลงนาม', data.pending.length]); tabs.push(['done', 'พิจารณาแล้ว', data.done.length]); }
+    if (!tabs.some(([key]) => key === state.tab)) state.tab = tabs[0][0];
+    const rows = state.tab === 'pending' ? data.pending : state.tab === 'done' ? data.done : data.mine;
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-stamp c-rose"></i> ส่งรายงานถึงผู้บริหาร</h2>
+        <p>ครูกด “ส่งผู้บริหาร” ในแถวของรายงาน (ไปราชการ/พัฒนาตนเอง · แผนการสอน · บันทึกหลังการสอน · บันทึก PLC · บันทึกโฮมรูม) ผู้บริหารให้ความเห็นและลงนาม ผลส่งกลับทางอีเมล</p></div>
+        <div class="actions no-print"><label>ปีการศึกษา<select data-year>${App.yearOptions(App.state.yearId)}</select></label></div></div></section>
+      <section class="panel"><div class="sv-tabs no-print" role="tablist">${tabs.map(([key, name, total]) => `<button type="button" role="tab" class="cn-filter ${state.tab === key ? 'on' : ''}"
+          aria-selected="${state.tab === key}" data-tab="${key}">${esc(name)}${total ? ` <span class="sv-count">${total}</span>` : ''}</button>`).join('')}</div>
+        ${rows.length ? `<div class="sv-list">${rows.map((row) => `<article class="sv-card ${row.status === SIGNED ? 'done' : ''}" data-id="${attr(row.id)}">
+          <div class="sv-card-main"><div class="cn-card-top">${badge(row.status)} <strong>${esc(row.title)}</strong></div>
+            <div class="cn-card-meta"><span><i class="fa-solid fa-folder"></i> ${esc(row.label)}</span>
+              <span><i class="fa-solid fa-user"></i> ${esc(App.personName(row.submitterPersonnelId) || '-')}</span>
+              <span><i class="fa-regular fa-clock"></i> ส่ง ${App.fmtDateTime(row.submittedAt)}${Number(row.round) > 1 ? ' (ครั้งที่ ' + esc(row.round) + ')' : ''}</span>
+              ${row.reviewedAt ? `<span><i class="fa-solid fa-signature"></i> ${esc(row.reviewerName || '')} · ${App.fmtDateTime(row.reviewedAt)}</span>` : ''}</div>
+            ${row.comment ? `<p class="sv-note"><b>ความเห็น:</b> ${esc(row.comment)}</p>` : row.note ? `<p class="sv-note">${esc(row.note)}</p>` : ''}</div>
+          <div class="sv-card-actions"><button type="button" class="primary-button" data-open="${attr(row.id)}">${state.tab === 'pending' ? '<i class="fa-solid fa-signature"></i> พิจารณา' : '<i class="fa-regular fa-file-lines"></i> เปิดเอกสาร'}</button></div></article>`).join('')}</div>`
+          : `<p class="muted empty-row">${state.tab === 'pending' ? 'ไม่มีรายงานรอลงนาม' : state.tab === 'done' ? 'ยังไม่มีรายงานที่พิจารณาแล้ว' : 'ยังไม่ได้ส่งรายงาน กด “ส่งผู้บริหาร” ในแถวของรายงานที่เมนูต่าง ๆ'}</p>`}</section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; App.route(); });
+    root.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => { ui().tab = button.dataset.tab; App.route(); }));
+    root.querySelectorAll('[data-open]').forEach((button) => button.addEventListener('click', () => openReview(button.dataset.open)));
+    if (App.pendingReview) { const id = App.pendingReview; App.pendingReview = null; openReview(id); }
+  });
+})();
+</script>

@@ -1,0 +1,656 @@
+<script>
+/**
+ * นิเทศการสอน (ครูส่งขอรับการนิเทศ → มอบหมาย → กรรมการให้คะแนนแยกคน → ประธานสรุปผล + น้องบอทพัฒนาครู) · บันทึก PLC 13 ประเด็น และประเมิน ว.23 (ครูประเมินตนเอง / กรรมการ 3 คน / สรุปผล)
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const esc = App.esc;
+  const attr = App.attr;
+  const LEVEL_TONE = (value) => /ดีเยี่ยม|ดีเด่น|ดีมาก/.test(value) ? 'success' : /ดี$|พอใช้/.test(value) ? 'warning' : value ? 'danger' : 'info';
+  const TEXTS = [['strengths', 'จุดเด่น'], ['improvements', 'จุดที่ควรพัฒนา'], ['bestPractice', 'วิธีปฏิบัติที่ดี (Best Practice)'], ['notes', 'ข้อเสนอแนะเพื่อการพัฒนา']];
+
+  // ---------- นิเทศการสอน: ครูส่งขอรับการนิเทศ → มอบหมาย → กรรมการให้คะแนนแยกคน → ประธานสรุปผล ----------
+  const STATUS_TONE = { 'รอมอบหมาย': 'warning', 'รอประเมิน': 'info', 'กำลังประเมิน': 'purple', 'ประเมินแล้ว': 'success' };
+  const COMMITTEE = [['supervisorId', 'ผู้นิเทศ (ประธานกรรมการ)'], ['committee2Id', 'กรรมการคนที่ 2'], ['committee3Id', 'กรรมการคนที่ 3'],
+    ['committee4Id', 'กรรมการคนที่ 4'], ['committee5Id', 'กรรมการคนที่ 5']];
+  const PLAN_FORM = 'ตรวจแผนการจัดการเรียนรู้';
+  // สถานะหน้าจออยู่ในแคชของหน้า (น้องบอทอ่าน supervisionId จากที่นี่) อ่านใหม่ทุกครั้งเพราะแคชถูกล้างเมื่อออกจากระบบ
+  const ui = () => App.cached('ui:supervision') || App.remember('ui:supervision', { tab: '', status: '', formType: '', q: '', supervisionId: '' });
+  let page = null;
+  const statusBadge = (status) => `<span class="badge ${STATUS_TONE[status] || 'info'}">${esc(status)}</span>`;
+
+  function youtubeId(url) {
+    const match = String(url || '').match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([\w-]{11})/);
+    return match ? match[1] : '';
+  }
+  function mediaButtons(row) {
+    return `${row.fileId ? `<button type="button" class="ghost-button" data-file="${attr(row.fileId)}"><i class="fa-regular fa-file-lines"></i> แผนการสอน</button>` : ''}
+      ${row.videoUrl ? `<a class="ghost-button" href="${attr(row.videoUrl)}" target="_blank" rel="noopener"><i class="fa-brands fa-youtube"></i> วีดีโอ</a>` : ''}`;
+  }
+
+  App.register('#/supervision', async () => {
+    const state = ui();
+    state.supervisionId = '';
+    const response = await App.call('supervision.page', { academicYearId: App.state.yearId });
+    if (!response.ok) return App.renderError(response.error);
+    page = response.data;
+    const tabs = tabList();
+    if (!tabs.some(([key]) => key === state.tab)) {
+      const waitingTasks = page.tasks.filter((item) => item.myStatus !== 'submitted' && item.status !== 'ประเมินแล้ว').length;
+      state.tab = waitingTasks ? 'tasks' : page.canManage && page.all.some((item) => item.status === 'รอมอบหมาย') ? 'pending' : tabs[0] ? tabs[0][0] : '';
+    }
+    paint();
+  });
+
+  function tabList() {
+    if (!page) return [];
+    const list = [];
+    if (page.linked) list.push(['mine', 'ของฉัน', page.mine.length], ['tasks', 'งานที่ต้องประเมิน', page.tasks.filter((item) => item.myStatus !== 'submitted' && item.status !== 'ประเมินแล้ว').length]);
+    if (page.canManage) list.push(['pending', 'รอมอบหมาย', page.all.filter((item) => item.status === 'รอมอบหมาย').length], ['all', 'ทั้งหมด', page.all.length]);
+    return list;
+  }
+
+  function paint() {
+    const state = ui();
+    const count = (status) => page.all.filter((item) => item.status === status).length;
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-person-chalkboard c-teal"></i> นิเทศการสอน</h2>
+        <p>ครูส่งแผนการจัดการเรียนรู้และวีดีโอการสอน เลือกแบบประเมินเอง → ผู้บริหารมอบหมายผู้นิเทศและกรรมการ → กรรมการให้คะแนนแยกคน → ประธานสรุปผล</p></div>
+        <div class="actions no-print"><label>ปีการศึกษา<select data-year>${App.yearOptions(App.state.yearId)}</select></label>
+          ${page.linked ? '<button type="button" class="primary-button" data-request><i class="fa-solid fa-paper-plane"></i> ส่งขอรับการนิเทศ</button>' : ''}
+          ${page.linked || page.canManage ? '<button type="button" class="secondary-button" data-overview><i class="fa-solid fa-chart-line"></i> ภาพรวมรายคน</button>' : ''}</div></div>
+      ${page.linked || page.canManage ? '' : '<p class="notice">บัญชีของคุณยังไม่ได้ผูกกับทะเบียนบุคลากร จึงส่งขอรับการนิเทศหรือเป็นกรรมการไม่ได้ กรุณาแจ้งผู้ดูแลระบบ</p>'}</section>
+      ${page.canManage ? `<section class="stat-grid">
+        ${App.statCard('amber', 'รอมอบหมาย', count('รอมอบหมาย'), 'fa-inbox', 'คำขอจากครู')}
+        ${App.statCard('blue', 'รอประเมิน', count('รอประเมิน'), 'fa-calendar-check', 'มอบหมายแล้ว')}
+        ${App.statCard('purple', 'กำลังประเมิน', count('กำลังประเมิน'), 'fa-pen-to-square', 'กรรมการให้คะแนนแล้วบางส่วน')}
+        ${App.statCard('green', 'ประเมินแล้ว', count('ประเมินแล้ว'), 'fa-circle-check', 'สรุปผลแล้ว')}</section>` : ''}
+      <section class="panel">
+        <div class="sv-tabs no-print" role="tablist">${tabList().map(([key, name, total]) => `<button type="button" role="tab" class="cn-filter ${state.tab === key ? 'on' : ''}"
+          aria-selected="${state.tab === key}" data-tab="${key}">${esc(name)}${total ? ` <span class="sv-count">${total}</span>` : ''}</button>`).join('')}</div>
+        <div data-body></div></section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; App.route(); });
+    const request = root.querySelector('[data-request]');
+    if (request) request.addEventListener('click', () => openRequest());
+    const overview = root.querySelector('[data-overview]');
+    if (overview) overview.addEventListener('click', () => openOverview(page.canManage ? '' : page.personnelId));
+    root.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => { ui().tab = button.dataset.tab; paint(); }));
+    paintBody(root.querySelector('[data-body]'));
+  }
+
+  function cardHtml(row, extra) {
+    const committee = row.committee.length ? `<span><i class="fa-solid fa-users"></i> กรรมการส่งคะแนนแล้ว ${row.submitted}/${row.committee.length}</span>` : '';
+    return `<article class="sv-card ${row.status === 'ประเมินแล้ว' ? 'done' : ''}" data-id="${attr(row.id)}">
+      <div class="sv-card-main">
+        <div class="cn-card-top">${extra && extra.select ? `<input type="checkbox" data-pick="${attr(row.id)}" aria-label="เลือกรายการนี้">` : ''}
+          ${statusBadge(row.status)} <strong>${esc(App.personName(row.teacherId) || '-')}</strong>
+          ${row.result ? `<span class="badge ${LEVEL_TONE(row.result)}">${esc(row.result)} ${esc(row.score)}%</span>` : ''}
+          ${extra && extra.myRole ? `<span class="chip">${esc(extra.myRole)}${extra.myStatus === 'submitted' ? ' · ส่งแล้ว' : extra.myStatus === 'draft' ? ' · ร่าง' : ''}</span>` : ''}</div>
+        <div class="cn-card-meta"><span><i class="fa-solid fa-clipboard-list"></i> ${esc(row.formType)}</span>
+          <span><i class="fa-solid fa-book"></i> ${esc(row.subjectName || '-')}${row.classLevel ? ' · ' + esc(row.classLevel) : ''}</span>
+          ${row.supervisionDate ? `<span><i class="fa-regular fa-calendar"></i> นิเทศ ${App.fmtDate(row.supervisionDate)}</span>` : `<span class="muted">ส่งเมื่อ ${App.fmtDate(String(row.createdAt).slice(0, 10))}</span>`}
+          ${row.supervisorId ? `<span><i class="fa-solid fa-user-tie"></i> ${esc(App.personName(row.supervisorId))}</span>` : ''}${committee}</div>
+        ${row.requestNote ? `<p class="sv-note">${esc(row.requestNote)}</p>` : ''}</div>
+      <div class="sv-card-actions no-print">${mediaButtons(row)}${(extra && extra.buttons) || ''}</div></article>`;
+  }
+
+  function filtered(rows) {
+    const state = ui();
+    const text = state.q.trim().toLowerCase();
+    return rows.filter((row) => (!state.status || row.status === state.status) && (!state.formType || row.formType === state.formType) &&
+      (!text || [App.personName(row.teacherId), row.subjectName, row.classLevel, row.formType].join(' ').toLowerCase().includes(text)));
+  }
+
+  function paintBody(box) {
+    const state = ui();
+    const list = (rows, extra, empty) => rows.length ? `<div class="sv-list">${rows.map((row) => cardHtml(row, extra(row))).join('')}</div>` : `<p class="muted empty-row">${empty}</p>`;
+    if (state.tab === 'mine') {
+      box.innerHTML = `<p class="muted"><i class="fa-solid fa-circle-info"></i> คำขอที่ยังรอมอบหมาย แก้ไขหรือยกเลิกได้ · ผลการนิเทศแสดงเมื่อประธานกรรมการสรุปผลแล้ว</p>
+        ${list(page.mine, (row) => ({ buttons: row.status === 'รอมอบหมาย'
+          ? `<button type="button" class="secondary-button" data-edit-request="${attr(row.id)}"><i class="fa-solid fa-pen"></i> แก้ไข</button>
+             <button type="button" class="ghost-button c-rose" data-cancel-request="${attr(row.id)}"><i class="fa-solid fa-xmark"></i> ยกเลิก</button>`
+          : row.status === 'ประเมินแล้ว' ? `<button type="button" class="primary-button" data-open="${attr(row.id)}"><i class="fa-solid fa-square-poll-vertical"></i> ดูผล</button>` : '' }),
+          'ยังไม่มีคำขอ กด “ส่งขอรับการนิเทศ” เพื่อส่งแผนการจัดการเรียนรู้และวีดีโอการสอน')}`;
+    } else if (state.tab === 'tasks') {
+      box.innerHTML = list(page.tasks, (row) => ({ myRole: row.myRole, myStatus: row.myStatus,
+        buttons: `<button type="button" class="primary-button" data-open="${attr(row.id)}">${row.status === 'ประเมินแล้ว' ? '<i class="fa-solid fa-eye"></i> ดู'
+          : row.myStatus === 'submitted' ? (row.myRole === 'ประธาน' ? '<i class="fa-solid fa-flag-checkered"></i> สรุปผล' : '<i class="fa-solid fa-eye"></i> ดู/แก้คะแนน')
+          : '<i class="fa-solid fa-list-check"></i> ให้คะแนน'}</button>` }), 'ยังไม่มีงานที่คุณต้องประเมิน');
+    } else if (state.tab === 'pending') {
+      const rows = page.all.filter((row) => row.status === 'รอมอบหมาย');
+      box.innerHTML = `${rows.length ? `<div class="sv-toolbar"><label class="check-row"><input type="checkbox" data-pick-all> เลือกทั้งหมด</label>
+          <button type="button" class="primary-button" data-assign-picked><i class="fa-solid fa-user-plus"></i> มอบหมายรายการที่เลือก</button></div>` : ''}
+        ${list(rows, (row) => ({ select: true, buttons: `<button type="button" class="primary-button" data-assign="${attr(row.id)}"><i class="fa-solid fa-user-plus"></i> มอบหมาย</button>` }), 'ไม่มีคำขอที่รอมอบหมาย')}`;
+    } else if (state.tab === 'all') {
+      const rows = filtered(page.all);
+      box.innerHTML = `<div class="cn-filters no-print"><select data-status aria-label="สถานะ"><option value="">ทุกสถานะ</option>${['รอมอบหมาย', 'รอประเมิน', 'กำลังประเมิน', 'ประเมินแล้ว'].map((name) => `<option ${state.status === name ? 'selected' : ''}>${name}</option>`).join('')}</select>
+          <select data-form aria-label="แบบประเมิน"><option value="">ทุกแบบประเมิน</option>${page.forms.map((form) => `<option ${state.formType === form.name ? 'selected' : ''}>${esc(form.name)}</option>`).join('')}</select>
+          <input type="search" data-q placeholder="ค้นหาครู วิชา ระดับชั้น" value="${attr(state.q)}" aria-label="ค้นหา">
+          <button type="button" class="secondary-button" data-add><i class="fa-solid fa-plus"></i> เพิ่มรายการเอง</button></div>
+        ${list(rows, (row) => ({ buttons: `<button type="button" class="primary-button" data-open="${attr(row.id)}"><i class="fa-solid fa-folder-open"></i> เปิด</button>
+          ${row.status !== 'ประเมินแล้ว' ? `<button type="button" class="secondary-button" data-assign="${attr(row.id)}"><i class="fa-solid fa-user-plus"></i> ${row.status === 'รอมอบหมาย' ? 'มอบหมาย' : 'เปลี่ยนกรรมการ'}</button>` : ''}
+          <button type="button" class="ghost-button" data-edit="${attr(row.id)}" aria-label="แก้ไขรายละเอียด"><i class="fa-solid fa-pen"></i></button>` }), 'ไม่มีรายการในมุมมองนี้')}`;
+      box.querySelector('[data-status]').addEventListener('change', (event) => { state.status = event.target.value; paintBody(box); });
+      box.querySelector('[data-form]').addEventListener('change', (event) => { state.formType = event.target.value; paintBody(box); });
+      const search = box.querySelector('[data-q]');
+      search.addEventListener('input', () => { state.q = search.value; const at = search.selectionStart; paintBody(box); const next = box.querySelector('[data-q]'); next.focus(); next.setSelectionRange(at, at); });
+      box.querySelector('[data-add]').addEventListener('click', () => App.openEntityForm('supervision', null, reload, { academicYearId: App.state.yearId, status: 'รอมอบหมาย' }));
+    } else box.innerHTML = '<p class="muted empty-row">ไม่มีข้อมูลที่คุณดูได้ในหน้านี้</p>';
+    bindBody(box);
+  }
+
+  function reload() { App.reloadEntity('supervision'); App.route(); }
+
+  function bindBody(box) {
+    const find = (id) => page.all.concat(page.mine, page.tasks).find((row) => row.id === id);
+    box.querySelectorAll('[data-file]').forEach((button) => button.addEventListener('click', () => App.openFile(button.dataset.file)));
+    box.querySelectorAll('[data-open]').forEach((button) => button.addEventListener('click', () => openRecord(button.dataset.open)));
+    box.querySelectorAll('[data-edit-request]').forEach((button) => button.addEventListener('click', () => openRequest(find(button.dataset.editRequest))));
+    box.querySelectorAll('[data-cancel-request]').forEach((button) => button.addEventListener('click', async () => {
+      if (!confirm('ยกเลิกคำขอรับการนิเทศนี้?')) return;
+      const result = await App.call('supervision.cancelRequest', { id: button.dataset.cancelRequest });
+      if (result.ok) { App.toast('ยกเลิกคำขอแล้ว', 'success'); reload(); }
+    }));
+    box.querySelectorAll('[data-assign]').forEach((button) => button.addEventListener('click', () => openAssign([find(button.dataset.assign)])));
+    box.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', async () => {
+      const response = await App.call('supervision.getScoring', { id: button.dataset.edit });
+      if (response.ok) App.openEntityForm('supervision', response.data.supervision, reload);
+    }));
+    const all = box.querySelector('[data-pick-all]');
+    if (all) all.addEventListener('change', () => box.querySelectorAll('[data-pick]').forEach((input) => { input.checked = all.checked; }));
+    const picked = box.querySelector('[data-assign-picked]');
+    if (picked) picked.addEventListener('click', () => {
+      const rows = [...box.querySelectorAll('[data-pick]:checked')].map((input) => find(input.dataset.pick)).filter(Boolean);
+      if (!rows.length) return App.toast('กรุณาเลือกรายการก่อน', 'error');
+      openAssign(rows);
+    });
+  }
+
+  // ---------- ครู: ส่ง/แก้ไขคำขอรับการนิเทศ ----------
+  function openRequest(row) {
+    const editing = !!row;
+    const plans = page.plans || [];
+    const body = App.openModal(editing ? 'แก้ไขคำขอรับการนิเทศ' : 'ส่งขอรับการนิเทศ', `<form class="form-grid" novalidate>
+      <label>รายวิชา <span class="c-rose">*</span><input name="subjectName" list="sv-subjects" maxlength="150" value="${attr(row ? row.subjectName : '')}" required>
+        <datalist id="sv-subjects">${[...new Set(plans.map((plan) => plan.subjectName).filter(Boolean))].map((name) => `<option value="${attr(name)}">`).join('')}</datalist>
+        <small class="field-error" data-error-for="subjectName"></small></label>
+      <label>ระดับชั้น<select name="classLevel"><option value="">— เลือก —</option>${((App.state.entities.supervision.fields.find((field) => field.key === 'classLevel') || {}).options || []).map((level) => `<option ${row && row.classLevel === level ? 'selected' : ''}>${esc(level)}</option>`).join('')}</select>
+        <small class="field-error" data-error-for="classLevel"></small></label>
+      ${editing ? `<p class="wide muted">แบบประเมิน: <b>${esc(row.formType)}</b></p>` : `<fieldset class="wide sv-forms"><legend>แบบประเมินที่ต้องการ <span class="c-rose">*</span> (เลือกได้หลายแบบ ระบบแยกเป็นรายการละ 1 แบบ)</legend>
+        ${page.forms.map((form) => `<label class="check-row"><input type="checkbox" name="formTypes" value="${attr(form.name)}" ${form.items ? '' : 'disabled'}> ${esc(form.name)}
+          <small class="muted">${form.items ? form.items + ' ข้อ' : 'ยังไม่มีเกณฑ์'}</small></label>`).join('')}
+        <small class="field-error" data-error-for="formTypes"></small></fieldset>`}
+      <fieldset class="wide sv-forms"><legend>แผนการจัดการเรียนรู้</legend>
+        ${plans.length ? `<label>เลือกจากเมนู “แผนการสอน” ที่บันทึกไว้<select name="planId"><option value="">— ไม่เลือก —</option>
+          ${plans.map((plan) => `<option value="${attr(plan.fileId)}" ${row && row.fileId === plan.fileId ? 'selected' : ''}>${esc(plan.title)}${plan.subjectName ? ' · ' + esc(plan.subjectName) : ''}</option>`).join('')}</select></label>` : ''}
+        <label>${plans.length ? 'หรือ ' : ''}แนบไฟล์ใหม่ (PDF/Word ไม่เกิน 8 MB)<input name="file" type="file" accept=".pdf,.doc,.docx,application/pdf"></label>
+        ${row && row.fileId ? `<small class="muted">มีไฟล์แล้ว <button type="button" class="ghost-button" data-file="${attr(row.fileId)}">เปิดไฟล์</button> (เลือกไฟล์ใหม่เพื่อแทนที่)</small>` : ''}
+        <small class="field-error" data-error-for="fileId"></small></fieldset>
+      <label class="wide">ลิงก์วีดีโอการสอน (YouTube หรือ Google Drive ที่เปิดสิทธิ์ให้ดูได้)<input name="videoUrl" type="url" inputmode="url" placeholder="https://youtu.be/..." value="${attr(row ? row.videoUrl || '' : '')}">
+        <small class="field-error" data-error-for="videoUrl"></small></label>
+      <label class="wide">ข้อความถึงผู้นิเทศ (ถ้ามี) เช่น คาบ/ห้องที่สะดวกให้เข้าสังเกต<textarea name="requestNote" rows="2" maxlength="1000">${esc(row ? row.requestNote || '' : '')}</textarea></label>
+      <p class="form-error wide" data-form-error></p>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="submit" class="primary-button"><i class="fa-solid fa-paper-plane"></i> ${editing ? 'บันทึก' : 'ส่งคำขอ'}</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    body.querySelectorAll('[data-file]').forEach((button) => button.addEventListener('click', () => App.openFile(button.dataset.file)));
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      App.clearErrors(form);
+      const submit = form.querySelector('[type=submit]');
+      let fileId = form.elements.planId ? form.elements.planId.value : '';
+      if (!fileId && row) fileId = row.fileId || '';
+      const file = form.elements.file.files[0];
+      if (file) {
+        if (file.size > 8 * 1024 * 1024) return App.showErrors(form, { fieldErrors: { fileId: 'ไฟล์ต้องไม่เกิน 8 MB' } });
+        submit.disabled = true;
+        const upload = await App.call('file.upload', { entity: 'lesson-plans', name: file.name, mimeType: file.type, base64: await App.fileToBase64(file) });
+        submit.disabled = false;
+        if (!upload.ok) return;
+        fileId = upload.data.fileId;
+      }
+      const payload = { subjectName: form.elements.subjectName.value, classLevel: form.elements.classLevel.value, fileId,
+        videoUrl: form.elements.videoUrl.value, requestNote: form.elements.requestNote.value, academicYearId: App.state.yearId };
+      if (editing) Object.assign(payload, { id: row.id, version: row.version });
+      else payload.formTypes = [...form.querySelectorAll('[name=formTypes]:checked')].map((input) => input.value);
+      submit.disabled = true;
+      const result = await App.call(editing ? 'supervision.updateRequest' : 'supervision.request', payload, { quiet: true });
+      submit.disabled = false;
+      if (!result.ok) { App.showErrors(form, result.error); form.querySelector('[data-form-error]').textContent = App.messageOf(result.error); return; }
+      App.closeModal();
+      App.toast(editing ? 'บันทึกแล้ว' : `ส่งคำขอแล้ว ${result.data.ids.length} รายการ รอผู้บริหารมอบหมายกรรมการ`, 'success');
+      ui().tab = 'mine';
+      reload();
+    });
+  }
+
+  // ---------- ผู้บริหาร: มอบหมายผู้นิเทศ/กรรมการ/วันนิเทศ ----------
+  function openAssign(rows) {
+    const first = rows[0] || {};
+    const current = (key) => rows.length === 1 && first.status !== 'รอมอบหมาย' ? (key === 'supervisorId' ? first.supervisorId : first.committee[COMMITTEE.findIndex(([k]) => k === key)] || '') : '';
+    const body = App.openModal('มอบหมายการนิเทศ', `<form class="form-grid" novalidate>
+      <div class="wide sv-assign-list">${rows.map((row) => `<div><b>${esc(App.personName(row.teacherId))}</b> · ${esc(row.formType)} · ${esc(row.subjectName || '-')}${row.classLevel ? ' ' + esc(row.classLevel) : ''}</div>`).join('')}</div>
+      <label>วันนิเทศ <span class="c-rose">*</span><input name="supervisionDate" type="date" value="${attr(rows.length === 1 ? first.supervisionDate || '' : '')}" required><small class="field-error" data-error-for="supervisionDate"></small></label>
+      ${COMMITTEE.map(([key, label], index) => `<label>${esc(label)}${index === 0 ? ' <span class="c-rose">*</span>' : ''}<select name="${key}">${App.options('personnel', current(key), { empty: index === 0 ? '— เลือก —' : '— ไม่มี —' })}</select>
+        <small class="field-error" data-error-for="${key}"></small></label>`).join('')}
+      <p class="wide muted">ผู้นิเทศและกรรมการต้องมีบัญชีผู้ใช้ที่ผูกกับทะเบียนบุคลากร จึงจะเห็นงานในแท็บ “งานที่ต้องประเมิน” · ระบบแจ้งทาง Telegram/LINE ตามที่ตั้งไว้</p>
+      <p class="form-error wide" data-form-error></p>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="submit" class="primary-button"><i class="fa-solid fa-user-check"></i> มอบหมาย ${rows.length} รายการ</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      App.clearErrors(form);
+      const payload = { ids: rows.map((row) => row.id), supervisionDate: form.elements.supervisionDate.value };
+      COMMITTEE.forEach(([key]) => { payload[key] = form.elements[key].value; });
+      const result = await App.call('supervision.assign', payload, { quiet: true });
+      if (!result.ok) { App.showErrors(form, result.error); form.querySelector('[data-form-error]').textContent = App.messageOf(result.error); return; }
+      App.closeModal();
+      App.toast('มอบหมายแล้ว ' + result.data.count + ' รายการ', 'success');
+      reload();
+    });
+  }
+
+  // ---------- เปิดรายการ: ให้คะแนน (กรรมการ) / คะแนนรวมและสรุปผล (ประธาน/ผู้บริหาร) / ผล (ครู) ----------
+  async function openRecord(id) {
+    const response = await App.call('supervision.getScoring', { id });
+    if (!response.ok) return;
+    const d = response.data;
+    const s = d.supervision;
+    ui().supervisionId = id;
+    const ai = await App.aiStatus();
+    const canAi = ai.supervision || ai.bot;
+    const yt = youtubeId(s.videoUrl);
+    const resultOnly = !d.role.member && !d.role.manage;
+    const committee = d.committee.map((person) => `<span class="chip">${person.chair ? '<i class="fa-solid fa-crown c-amber"></i> ' : ''}${esc(person.name || '-')}
+      ${person.status === 'submitted' ? '<i class="fa-solid fa-circle-check c-green" title="ส่งแล้ว"></i>' : person.status === 'draft' ? '<small>(ร่าง)</small>' : '<small class="muted">(ยังไม่ส่ง)</small>'}</span>`).join(' ');
+    const scoringHtml = d.canScore ? `<section class="sv-block"><h3><i class="fa-solid fa-list-check"></i> คะแนนของฉัน${d.mine && d.mine.status === 'submitted' ? ' <span class="badge success">ส่งแล้ว (แก้ได้จนกว่าจะสรุปผล)</span>' : ''}</h3>
+        <div class="score-summary" data-summary></div>
+        <div class="sv-items">${d.items.map((item) => `<div class="sv-item"><div class="sv-item-text">${esc(item.item)}</div>
+          <div class="sv-seg" role="radiogroup" aria-label="${attr(item.item)}">${Array.from({ length: item.maxScore + 1 }, (_, value) => `<label><input type="radio" name="i-${attr(item.id)}" value="${value}"
+            data-item="${attr(item.id)}" data-max="${item.maxScore}" ${String(item.score) === String(value) ? 'checked' : ''}><span>${value}</span></label>`).join('')}</div></div>`).join('')}</div>
+        <label class="wide">ความเห็นของฉัน<textarea data-comment rows="3" maxlength="3000">${esc(d.mine ? d.mine.comment || '' : '')}</textarea></label>
+        <div class="form-actions"><button type="button" class="secondary-button" data-score="draft"><i class="fa-regular fa-floppy-disk"></i> บันทึกร่าง</button>
+          <button type="button" class="primary-button" data-score="submit"><i class="fa-solid fa-paper-plane"></i> ส่งคะแนน</button></div></section>` : '';
+    const averageHtml = d.average ? `<section class="sv-block"><h3><i class="fa-solid fa-table"></i> ${resultOnly ? 'ผลการนิเทศ' : 'คะแนนเฉลี่ยของกรรมการ'}
+        ${d.averagePercent !== '' ? `<span class="badge ${LEVEL_TONE(levelOf(d.averagePercent))}">ร้อยละ ${d.averagePercent} · ${levelOf(d.averagePercent)}</span>` : '<span class="muted">ยังไม่มีกรรมการส่งคะแนน</span>'}</h3>
+        <div class="table-wrap"><table class="data-table"><thead><tr><th>รายการประเมิน</th>${d.evaluators.map((person, index) => `<th class="center" title="${attr(person.name)}">กก.${index + 1}</th>`).join('')}<th class="center">เฉลี่ย</th></tr></thead><tbody>
+          ${d.average.map((item) => `<tr><td>${esc(item.item)}</td>${d.evaluators.map((person) => `<td class="center">${esc(person.scores[item.id] ?? '')}</td>`).join('')}
+            <td class="center"><b>${esc(item.score)}</b>/${item.maxScore}</td></tr>`).join('')}</tbody></table></div>
+        ${d.evaluators.filter((person) => person.comment).map((person, index) => `<p class="sv-comment"><b>กก.${d.evaluators.indexOf(person) + 1} ${esc(person.name)}:</b> ${esc(person.comment)}</p>`).join('')}</section>` : '';
+    const summaryHtml = d.canSummarize ? `<section class="sv-block"><h3><i class="fa-solid fa-flag-checkered"></i> สรุปผลโดยประธานกรรมการ</h3>
+        ${TEXTS.map(([key, label]) => `<label class="wide">${esc(label)} ${canAi ? `<button type="button" class="ghost-button" data-ai="${key}"><i class="fa-solid fa-wand-magic-sparkles"></i> AI ช่วยร่าง</button>` : ''}
+          <textarea name="${key}" rows="3" maxlength="3000">${esc(s[key] || '')}</textarea></label>`).join('')}
+        <div class="sv-advice"><div class="tl-ai-head"><span class="tl-ai-mark"><i class="fa-solid fa-seedling"></i></span><div><strong>ความเห็นเพื่อการพัฒนาครู</strong>
+          <small>น้องวิชาการอ่านคะแนนเฉลี่ย ความเห็นกรรมการ และบันทึกหลังการสอนล่าสุด แล้วเขียน จุดแข็ง · สิ่งที่ควรพัฒนาก่อน · ปรับการสอนแบบ Active Learning · แผนพัฒนาตนเอง 1 ภาคเรียน (ไม่ส่งชื่อครู)</small></div></div>
+          <div class="tl-ai-actions"><button type="button" class="primary-button" data-advice ${canAi ? '' : 'disabled'}><i class="fa-solid fa-wand-magic-sparkles"></i> น้องบอทให้ความเห็นพัฒนาครู</button>
+            ${canAi ? '' : '<small class="muted">ใช้ได้เมื่อผู้ดูแลระบบใส่ API key ของ AI นิเทศ หรือน้องบอท</small>'}</div>
+          <textarea name="aiAdvice" rows="10" maxlength="6000" placeholder="กดปุ่มด้านบน หรือพิมพ์เอง · แก้ไขได้ก่อนสรุปผล">${esc(s.aiAdvice || '')}</textarea></div>
+        <div class="form-actions"><button type="button" class="secondary-button" data-summary-save="draft"><i class="fa-regular fa-floppy-disk"></i> บันทึกร่าง</button>
+          ${d.status !== 'ประเมินแล้ว' ? '<button type="button" class="primary-button" data-summary-save="final"><i class="fa-solid fa-flag-checkered"></i> สรุปผล</button>' : ''}</div></section>`
+      : d.status === 'ประเมินแล้ว' ? `<section class="sv-block">${TEXTS.map(([key, label]) => s[key] ? `<h3>${esc(label)}</h3><p class="pre">${esc(s[key])}</p>` : '').join('')}
+        ${s.aiAdvice ? `<h3><i class="fa-solid fa-seedling c-green"></i> ความเห็นเพื่อการพัฒนาครู</h3><div class="pre sv-advice-text">${esc(s.aiAdvice)}</div>` : ''}</section>` : '';
+    const body = App.openModal(`${d.formType}: ${App.personName(s.teacherId)}`, `<div class="sv-record">
+      <div class="sv-head"><div>${statusBadge(d.status)} <b>${esc(s.subjectName || '-')}</b>${s.classLevel ? ' · ' + esc(s.classLevel) : ''}
+        ${s.supervisionDate ? ` · นิเทศ ${App.fmtDate(s.supervisionDate)}` : ''}</div><div class="sv-card-actions">${mediaButtons(s)}
+        ${d.status === 'ประเมินแล้ว' || d.role.manage ? '<button type="button" class="ghost-button" data-print><i class="fa-solid fa-print"></i> พิมพ์</button>' : ''}
+        ${d.canReopen ? '<button type="button" class="ghost-button" data-reopen><i class="fa-solid fa-lock-open"></i> เปิดแก้ไข</button>' : ''}</div></div>
+      ${s.requestNote ? `<p class="sv-note"><b>ข้อความจากครู:</b> ${esc(s.requestNote)}</p>` : ''}
+      ${yt ? `<div class="sv-video"><iframe src="https://www.youtube-nocookie.com/embed/${attr(yt)}" title="วีดีโอการสอน" loading="lazy" allowfullscreen
+        allow="accelerometer; encrypted-media; picture-in-picture"></iframe></div>` : ''}
+      ${!resultOnly ? `<div class="sv-committee"><span class="muted">คณะกรรมการ:</span> ${committee || '<span class="muted">ยังไม่ได้มอบหมาย</span>'}</div>` : ''}
+      ${d.canScore && !d.average ? '<p class="muted"><i class="fa-solid fa-eye-slash"></i> คะแนนของกรรมการคนอื่นจะแสดงหลังคุณส่งคะแนนแล้ว</p>' : ''}
+      ${scoringHtml}${averageHtml}${summaryHtml}
+      <p class="form-error" data-form-error></p></div>`);
+    body.querySelectorAll('[data-file]').forEach((button) => button.addEventListener('click', () => App.openFile(button.dataset.file)));
+    const printButton = body.querySelector('[data-print]');
+    if (printButton) printButton.addEventListener('click', () => printSupervision(d));
+    const reopenButton = body.querySelector('[data-reopen]');
+    if (reopenButton) reopenButton.addEventListener('click', async () => {
+      if (!confirm('เปิดให้กรรมการแก้คะแนนและประธานสรุปผลใหม่?')) return;
+      const result = await App.call('supervision.reopen', { id });
+      if (result.ok) { App.toast('เปิดแก้ไขแล้ว', 'success'); App.reloadEntity('supervision'); await App.route(); openRecord(id); }
+    });
+    const error = body.querySelector('[data-form-error]');
+    if (d.canScore) bindScoring(body, d, id, error);
+    if (d.canSummarize) bindSummary(body, d, id, error);
+  }
+
+  function bindScoring(body, d, id, error) {
+    const radios = () => [...body.querySelectorAll('[data-item]:checked')];
+    const summarize = () => {
+      const done = radios();
+      const got = done.reduce((sum, input) => sum + Number(input.value), 0);
+      const full = done.reduce((sum, input) => sum + Number(input.dataset.max), 0);
+      const percent = full ? Math.round(got * 1000 / full) / 10 : 0;
+      body.querySelector('[data-summary]').innerHTML = `ให้คะแนนแล้ว ${done.length}/${d.items.length} ข้อ · ${got}/${full} คะแนน · <b>ร้อยละ ${percent}</b>
+        ${full ? `<span class="badge ${LEVEL_TONE(levelOf(percent))}">${levelOf(percent)}</span>` : ''}`;
+    };
+    body.querySelectorAll('[data-item]').forEach((input) => input.addEventListener('change', summarize));
+    summarize();
+    body.querySelectorAll('[data-score]').forEach((button) => button.addEventListener('click', async () => {
+      const submit = button.dataset.score === 'submit';
+      const scores = Object.fromEntries(d.items.map((item) => [item.id, '']));
+      radios().forEach((input) => { scores[input.dataset.item] = input.value; });
+      if (submit && Object.values(scores).some((value) => value === '')) { error.textContent = 'กรุณาให้คะแนนให้ครบทุกข้อก่อนส่ง (ยังไม่ครบสามารถกด “บันทึกร่าง” ได้)'; return; }
+      button.disabled = true;
+      const result = await App.call('supervision.saveMyScore', { id, scores, comment: body.querySelector('[data-comment]').value, submit }, { quiet: true });
+      button.disabled = false;
+      if (!result.ok) { error.textContent = App.messageOf(result.error); return; }
+      App.toast(submit ? `ส่งคะแนนแล้ว (กรรมการส่งแล้ว ${result.data.submitted}/${result.data.total} คน)` : 'บันทึกร่างแล้ว', 'success');
+      App.reloadEntity('supervision');
+      await App.route();
+      if (submit) openRecord(id);
+    }));
+  }
+
+  function bindSummary(body, d, id, error) {
+    body.querySelectorAll('[data-ai]').forEach((button) => button.addEventListener('click', async () => {
+      const field = button.dataset.ai;
+      const box = body.querySelector(`[name="${field}"]`);
+      button.disabled = true;
+      const result = await App.call('supervision.aiDraft', { id, field, existing: box.value }, { silent: true });
+      button.disabled = false;
+      if (result.ok) { box.value = result.data.text; App.toast('AI ร่างข้อความแล้ว กรุณาตรวจทาน', 'success'); }
+    }));
+    const advice = body.querySelector('[data-advice]');
+    advice.addEventListener('click', async () => {
+      advice.disabled = true;
+      const old = advice.innerHTML;
+      advice.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> น้องวิชาการกำลังวิเคราะห์...';
+      const result = await App.call('supervision.aiAdvice', { id }, { silent: true });
+      advice.disabled = false;
+      advice.innerHTML = old;
+      if (result.ok) { body.querySelector('[name=aiAdvice]').value = result.data.text; App.toast('ได้ความเห็นแล้ว กรุณาตรวจทานและแก้ไขก่อนสรุปผล', 'success'); }
+    });
+    body.querySelectorAll('[data-summary-save]').forEach((button) => button.addEventListener('click', async () => {
+      const final = button.dataset.summarySave === 'final';
+      if (final && !confirm('สรุปผลการนิเทศ? หลังสรุป ครูจะเห็นผลและกรรมการแก้คะแนนไม่ได้')) return;
+      const payload = { id, final, aiAdvice: body.querySelector('[name=aiAdvice]').value };
+      TEXTS.forEach(([key]) => { payload[key] = body.querySelector(`[name="${key}"]`).value; });
+      button.disabled = true;
+      const result = await App.call('supervision.summarize', payload, { quiet: true });
+      button.disabled = false;
+      if (!result.ok) { error.textContent = App.messageOf(result.error); return; }
+      App.toast(final ? `สรุปผลแล้ว ร้อยละ ${result.data.score} · ${result.data.result}` : 'บันทึกร่างแล้ว', 'success');
+      App.closeModal();
+      reload();
+    }));
+  }
+
+  function levelOf(percent) {
+    return percent >= 90 ? 'ดีเยี่ยม' : percent >= 80 ? 'ดีมาก' : percent >= 70 ? 'ดี' : percent >= 60 ? 'พอใช้' : 'ปรับปรุง';
+  }
+
+  async function imageData(fileId) {
+    if (!fileId) return '';
+    const response = await App.call('file.get', { fileId }, { silent: true, quiet: true });
+    return response.ok && /^image\//.test(response.data.mimeType) ? `data:${response.data.mimeType};base64,${response.data.base64}` : '';
+  }
+
+  async function printSupervision(d) {
+    const s = d.supervision;
+    App.setLoading(true);
+    const photos = (await Promise.all([s.photo1FileId, s.photo2FileId, s.photo3FileId].map(imageData))).filter(Boolean);
+    App.setLoading(false);
+    const items = d.average || [];
+    const scored = items.filter((item) => item.score !== '' && item.score !== null);
+    const got = Math.round(scored.reduce((sum, item) => sum + Number(item.score), 0) * 100) / 100;
+    const full = scored.reduce((sum, item) => sum + Number(item.maxScore), 0);
+    const people = d.evaluators;
+    App.printHtml('รายงานการนิเทศ', `<h2 style="text-align:center">บันทึกผลการนิเทศ ${esc(d.formType)}</h2>
+      <p style="text-align:center">${esc(App.state.settings.schoolName || '')} ปีการศึกษา ${esc(App.label('academicYears', s.academicYearId))}</p>
+      <table><tr><th>ครูผู้รับการนิเทศ</th><td>${esc(App.personName(s.teacherId))}</td><th>วันที่นิเทศ</th><td>${App.fmtDate(s.supervisionDate)}</td></tr>
+        <tr><th>รายวิชา</th><td>${esc(s.subjectName || '-')}</td><th>ระดับชั้น</th><td>${esc(s.classLevel || '-')}</td></tr></table>
+      <table><thead><tr><th>ที่</th><th>รายการประเมิน</th><th class="center">เต็ม</th>${people.map((person, index) => `<th class="center">กก.${index + 1}</th>`).join('')}<th class="center">เฉลี่ย</th></tr></thead><tbody>
+        ${items.map((item, index) => `<tr><td class="center">${index + 1}</td><td>${esc(item.item)}</td><td class="center">${item.maxScore}</td>
+          ${people.map((person) => `<td class="center">${esc(person.scores[item.id] ?? '')}</td>`).join('')}<td class="center">${esc(item.score)}</td></tr>`).join('')}
+        <tr><th colspan="${3 + people.length}" class="right">รวม (เฉลี่ย)</th><th class="center">${got}/${full}</th></tr>
+        <tr><th colspan="${3 + people.length}" class="right">ร้อยละ / ระดับผล</th><th class="center">${esc(s.score)} · ${esc(s.result || '-')}</th></tr></tbody></table>
+      ${people.length ? `<p class="muted">${people.map((person, index) => `กก.${index + 1} = ${esc(person.name)}`).join(' · ')}</p>` : ''}
+      ${people.filter((person) => person.comment).map((person) => `<p><b>ความเห็น ${esc(person.name)}:</b> <span class="pre">${esc(person.comment)}</span></p>`).join('')}
+      ${TEXTS.map(([key, label]) => s[key] ? `<h3>${esc(label)}</h3><p class="pre">${esc(s[key])}</p>` : '').join('')}
+      ${s.aiAdvice ? `<h3>ความเห็นเพื่อการพัฒนาครู</h3><p class="pre">${esc(s.aiAdvice)}</p>` : ''}
+      ${photos.length ? `<h3>ภาพประกอบการนิเทศ</h3><div class="photos">${photos.map((src) => `<img src="${attr(src)}">`).join('')}</div>` : ''}
+      <div class="sign">${d.committee.map((person) => `<div>ลงชื่อ ....................................<br>(${esc(person.name)})<br>${person.chair ? 'ผู้นิเทศ/ประธานกรรมการ' : 'กรรมการ'}</div>`).join('')}
+        <div>ลงชื่อ ....................................<br>(${esc(App.personName(s.teacherId))})<br>ผู้รับการนิเทศ</div></div>`);
+  }
+
+  // ---------- ภาพรวมรายคน: ผลนิเทศทุกครั้ง ด้านที่ต่ำซ้ำ PLC และน้องบอทวิเคราะห์แนวโน้ม ----------
+  async function openOverview(teacherId) {
+    const body = App.openModal('ภาพรวมการพัฒนาครูรายคน', `<div class="sv-overview">
+      ${page.canManage ? `<label>เลือกครู<select data-teacher>${App.options('personnel', teacherId, { empty: '— เลือกครู —' })}</select></label>` : ''}
+      <div data-overview-body>${teacherId ? '<p class="muted">กำลังโหลด...</p>' : '<p class="muted">เลือกครูเพื่อดูผลนิเทศทุกครั้ง ด้านที่ควรพัฒนา และ PLC ที่เข้าร่วม</p>'}</div></div>`);
+    const select = body.querySelector('[data-teacher]');
+    if (select) select.addEventListener('change', () => load(select.value));
+    const ai = await App.aiStatus();
+    async function load(id) {
+      const box = body.querySelector('[data-overview-body]');
+      if (!id) { box.innerHTML = ''; return; }
+      const response = await App.call('supervision.overview', { teacherId: id }, { silent: true });
+      if (!response.ok) { box.innerHTML = `<p class="form-error">${esc(App.messageOf(response.error))}</p>`; return; }
+      const o = response.data;
+      const max = 100;
+      box.innerHTML = `${o.records.length ? `<h3>ผลนิเทศแต่ละครั้ง</h3><div class="sv-bars">${o.records.map((row) => `<div class="sv-bar"><span class="sv-bar-label">${App.fmtDate(row.date)} · ${esc(row.formType)}${row.subjectName ? ' · ' + esc(row.subjectName) : ''}</span>
+          <span class="sv-bar-track"><span class="sv-bar-fill ${LEVEL_TONE(row.result)}" style="width:${Math.max(4, Math.min(100, Number(row.score) || 0)) * 100 / max}%"></span></span>
+          <b>${esc(row.score)}%</b></div>`).join('')}</div>` : '<p class="notice">ยังไม่มีผลนิเทศที่สรุปแล้ว</p>'}
+        ${o.weak.length ? `<h3>ด้านที่ควรพัฒนา (เฉลี่ยต่ำกว่าร้อยละ 70)</h3><ul>${o.weak.map((item) => `<li>${esc(item.item)} — ร้อยละ ${item.percent}${item.times > 1 ? ` (ต่ำ ${item.low}/${item.times} ครั้ง)` : ''}</li>`).join('')}</ul>` : ''}
+        ${o.strong.length ? `<h3>ด้านที่โดดเด่น</h3><ul>${o.strong.map((item) => `<li>${esc(item.item)} — ร้อยละ ${item.percent}</li>`).join('')}</ul>` : ''}
+        <h3>PLC ที่เข้าร่วม (${o.plc.length})</h3>${o.plc.length ? `<ul>${o.plc.map((row) => `<li>${App.fmtDate(row.meetingDate)} · ${esc(row.topic)}${row.isSuccess ? ` <span class="badge ${row.isSuccess === 'สำเร็จ' ? 'success' : 'warning'}">${esc(row.isSuccess)}</span>` : ''}</li>`).join('')}</ul>` : '<p class="muted">ยังไม่มีบันทึก PLC</p>'}
+        <p class="muted">บันทึกหลังการสอน ${o.teachingLogs} ครั้ง</p>
+        ${o.records.length ? `<div class="sv-advice"><div class="tl-ai-actions"><button type="button" class="primary-button" data-ai-overview ${ai.supervision || ai.bot ? '' : 'disabled'}>
+          <i class="fa-solid fa-wand-magic-sparkles"></i> น้องบอทวิเคราะห์แนวโน้มและแนะนำ PLC/การอบรม</button></div><div class="pre sv-advice-text" data-ai-text hidden></div></div>` : ''}`;
+      const button = box.querySelector('[data-ai-overview]');
+      if (button) button.addEventListener('click', async () => {
+        button.disabled = true;
+        const result = await App.call('supervision.aiOverview', { teacherId: id }, { silent: true });
+        button.disabled = false;
+        if (!result.ok) return;
+        const text = box.querySelector('[data-ai-text]');
+        text.hidden = false;
+        text.textContent = result.data.text;
+      });
+    }
+    if (teacherId) load(teacherId);
+  }
+
+  // ---------- บันทึก PLC 13 ประเด็น ----------
+  const PLC_ORDER = ['academicYearId', 'meetingDate', 'teamName', 'subjectGroupId', 'topic', 'memberIds', 'members', 'problem', 'objective', 'cause', 'knowledge',
+    'plan', 'result', 'otherKnowledge', 'application', 'obstacle', 'goodPractice', 'reflection', 'innovationName', 'innovationFor', 'isSuccess', 'successReason',
+    'fileId', 'photo1FileId', 'photo2FileId'];
+  const PLC_SECTIONS = { problem: 'ส่วนที่ 2 · รายละเอียด 13 ประเด็น', innovationName: '12. นวัตกรรม และ 13. ผลการดำเนินงาน', fileId: 'ไฟล์และภาพประกอบ' };
+
+  App.entityFormReady['plc'] = async (form, row) => {
+    const labelOf = (key) => form.elements[key] && form.elements[key].closest('label');
+    const actions = form.querySelector('.form-actions');
+    PLC_ORDER.forEach((key) => {
+      const label = labelOf(key);
+      if (!label) return;
+      if (PLC_SECTIONS[key]) {
+        const head = document.createElement('h3');
+        head.className = 'wide plc-section';
+        head.textContent = PLC_SECTIONS[key];
+        actions.before(head);
+      }
+      actions.before(label);
+    });
+    const error = form.querySelector('[data-form-error]');
+    if (error) actions.before(error);
+    // สมาชิก: เลือกจากรายชื่อบุคลากร (เก็บเป็นรหัสคั่นด้วย ,) · ช่อง "สมาชิก" เดิมเก็บไว้สำหรับรายชื่อที่พิมพ์เอง/บุคคลภายนอก
+    const hidden = form.elements.memberIds;
+    const chosen = new Set(String(hidden.value || '').split(',').filter(Boolean));
+    if (!chosen.size && !row && App.state.user.personnelId) chosen.add(String(App.state.user.personnelId));
+    hidden.type = 'hidden';
+    // รายการติ๊กเลือกอยู่ใน label ไม่ได้ (label ซ้อน label) จึงเปลี่ยนกรอบช่องนี้เป็น div เต็มความกว้าง
+    const field = hidden.closest('label');
+    const wrap = document.createElement('div');
+    wrap.className = 'wide plc-members-field';
+    while (field.firstChild) wrap.appendChild(field.firstChild);
+    field.replaceWith(wrap);
+    const picker = document.createElement('div');
+    picker.className = 'plc-members';
+    const people = App.lookupList('personnel');
+    const paint = (text) => {
+      const q = String(text || '').trim();
+      picker.querySelector('[data-list]').innerHTML = people.filter((person) => !q || person.label.includes(q) || chosen.has(String(person.id)))
+        .slice(0, 80).map((person) => `<label class="check-row"><input type="checkbox" value="${attr(person.id)}" ${chosen.has(String(person.id)) ? 'checked' : ''}> ${esc(person.label)}</label>`).join('');
+      picker.querySelector('[data-count]').textContent = chosen.size ? `เลือกแล้ว ${chosen.size} คน` : '';
+    };
+    picker.innerHTML = `<input type="search" placeholder="ค้นหาชื่อบุคลากร" aria-label="ค้นหาสมาชิก"><small class="muted" data-count></small><div class="plc-member-list" data-list></div>`;
+    hidden.after(picker);
+    paint('');
+    picker.querySelector('input[type=search]').addEventListener('input', (event) => paint(event.target.value));
+    picker.addEventListener('change', (event) => {
+      if (event.target.type !== 'checkbox') return;
+      if (event.target.checked) chosen.add(event.target.value); else chosen.delete(event.target.value);
+      hidden.value = [...chosen].join(',');
+      picker.querySelector('[data-count]').textContent = chosen.size ? `เลือกแล้ว ${chosen.size} คน` : '';
+    });
+    hidden.value = [...chosen].join(',');
+    if (form.elements.members) form.elements.members.closest('label').firstChild.textContent = 'สมาชิกอื่น ๆ (พิมพ์เอง เช่น บุคคลภายนอก)';
+    // น้องบอทช่วยเรียบเรียง
+    const status = await App.aiStatus();
+    const box = document.createElement('div');
+    box.className = 'wide tl-ai';
+    box.innerHTML = `<div class="tl-ai-head"><span class="tl-ai-mark"><i class="fa-solid fa-feather"></i></span>
+      <div><strong>ให้น้องบอทช่วยเรียบเรียง</strong><small>พิมพ์สั้น ๆ ตามที่ทำจริงในแต่ละประเด็น แล้วกดปุ่ม น้องบอทจะเรียบเรียงเป็นภาษาราชการให้เฉพาะประเด็นที่มีข้อความ ไม่เพิ่มข้อเท็จจริง (ตรวจทานก่อนบันทึก)</small></div></div>
+      <div class="tl-ai-actions"><button type="button" class="secondary-button" data-polish ${status.supervision || status.bot ? '' : 'disabled'}><i class="fa-solid fa-wand-magic-sparkles"></i> เรียบเรียงข้อความ</button>
+        ${status.supervision || status.bot ? '' : '<small class="muted">ใช้ได้เมื่อผู้ดูแลระบบใส่ API key ของ AI นิเทศ หรือน้องบอท</small>'}</div>`;
+    form.querySelector('.plc-section').after(box);
+    box.querySelector('[data-polish]').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      const values = { topic: form.elements.topic.value };
+      ['problem', 'objective', 'cause', 'knowledge', 'plan', 'result', 'otherKnowledge', 'application', 'obstacle', 'goodPractice', 'reflection', 'successReason']
+        .forEach((key) => { values[key] = form.elements[key].value; });
+      button.disabled = true;
+      const result = await App.call('plc.polish', { values }, { silent: true });
+      button.disabled = false;
+      if (!result.ok) return;
+      Object.entries(result.data.values).forEach(([key, text]) => { if (form.elements[key]) form.elements[key].value = text; });
+      App.toast('เรียบเรียงแล้ว ' + Object.keys(result.data.values).length + ' ประเด็น กรุณาตรวจทาน', 'success');
+    });
+  };
+
+  function printPlc(row) {
+    const text = (key) => esc(row[key] || '-');
+    const members = String(row.memberIds || '').split(',').filter(Boolean).map((id) => App.personName(id)).concat(row.members ? [row.members] : []);
+    const sections = [['1. สภาพปัญหา', 'problem'], ['2. วัตถุประสงค์', 'objective'], ['3. สาเหตุของปัญหา', 'cause'], ['4. ความรู้/หลักการที่ใช้', 'knowledge'],
+      ['5. กิจกรรมดำเนินงาน', 'plan'], ['6. ผลที่ได้รับ', 'result'], ['7. ความรู้อื่น ๆ ที่ได้', 'otherKnowledge'], ['8. การประยุกต์ใช้', 'application'],
+      ['9. อุปสรรค', 'obstacle'], ['10. ข้อควรปฏิบัติ', 'goodPractice'], ['11. แนวทางปรับปรุง', 'reflection']];
+    App.printHtml('บันทึกกิจกรรม PLC', `<h2 style="text-align:center">แบบบันทึกกิจกรรมชุมชนการเรียนรู้ทางวิชาชีพ (PLC)</h2>
+      <p style="text-align:center">${esc(App.state.settings.schoolName || '')} ปีการศึกษา ${esc(App.label('academicYears', row.academicYearId))}</p>
+      <table><tr><th>ชื่อกลุ่ม</th><td>${text('teamName')}</td><th>วันที่</th><td>${App.fmtDate(row.meetingDate)}</td></tr>
+        <tr><th>กลุ่มสาระฯ</th><td>${esc(App.label('subjectGroups', row.subjectGroupId) || '-')}</td><th>ประเด็น</th><td>${text('topic')}</td></tr>
+        <tr><th>สมาชิก</th><td colspan="3">${esc(members.join(', ') || '-')}</td></tr></table>
+      <table><thead><tr><th style="width:28%">ประเด็น</th><th>รายละเอียด</th></tr></thead><tbody>
+        ${sections.map(([label, key]) => `<tr><td>${label}</td><td class="pre">${text(key)}</td></tr>`).join('')}
+        <tr><td>12. นวัตกรรม</td><td>${text('innovationName')}${row.innovationFor ? ' · สำหรับ ' + text('innovationFor') : ''}</td></tr>
+        <tr><td>13. ผลการดำเนินงาน</td><td>${text('isSuccess')}${row.successReason ? ' — ' + text('successReason') : ''}</td></tr></tbody></table>
+      <div class="sign">${members.slice(0, 8).map((name) => `<div>ลงชื่อ ....................................<br>(${esc(name)})</div>`).join('')}</div>`);
+  }
+
+  App.entityActions['plc'] = [{ label: 'พิมพ์', icon: 'fa-print', permission: 'plc.view', handler: printPlc }];
+
+  // ---------- ประเมิน ว.23 ของฉัน ----------
+  App.register('#/pa-my', async () => {
+    const response = await App.call('pa.myTasks');
+    if (!response.ok) return App.renderError(response.error);
+    const data = response.data;
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-star-half-stroke c-amber"></i> ประเมิน ว.23 ของฉัน</h2>
+        <p>ประเมินตนเอง (เมื่อคุณเป็นผู้รับการประเมิน) หรือให้คะแนนในฐานะกรรมการ · ระดับคะแนน 1–4 ต่อข้อ</p></div></div>
+      ${!data.linked ? '<div class="notice">บัญชีของคุณยังไม่ได้ผูกกับทะเบียนบุคลากร กรุณาแจ้งผู้ดูแลระบบ</div>' : ''}
+      ${data.linked ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>ปี/รอบ</th><th>ผู้รับการประเมิน</th><th>แบบประเมิน</th><th>บทบาทของฉัน</th>
+        <th>สถานะของฉัน</th><th>สถานะรวม</th><th>ผล</th><th></th></tr></thead><tbody>
+        ${data.tasks.length ? data.tasks.map((task) => `<tr><td>${esc(task.year)}<br><small class="muted">${esc(task.round)}</small></td><td>${esc(task.teacherName)}</td>
+          <td>${esc(task.template)}</td><td>${esc(task.roleName)}</td>
+          <td>${task.myStatus === 'submitted' ? '<span class="badge success">ส่งแล้ว</span>' : task.myStatus === 'draft' ? '<span class="badge warning">ร่าง</span>' : '<span class="badge info">ยังไม่ประเมิน</span>'}</td>
+          <td>${esc(task.evaluationStatus)}</td><td>${task.result ? `<span class="badge ${LEVEL_TONE(task.result)}">${esc(task.result)}</span> ${esc(task.totalScore)}` : ''}</td>
+          <td><button type="button" class="primary-button" data-open="${attr(task.evaluationId)}" data-role="${attr(task.role)}">${task.myStatus === 'submitted' ? 'ดู' : 'ประเมิน'}</button></td></tr>`).join('')
+          : '<tr><td colspan="8" class="empty-row">ยังไม่มีรายการที่เกี่ยวข้องกับคุณ</td></tr>'}</tbody></table></div>` : ''}</section><div id="pa-form"></div>`);
+    document.querySelectorAll('[data-open]').forEach((button) => button.addEventListener('click', () => openPaForm(button.dataset.open, button.dataset.role)));
+  });
+
+  async function openPaForm(evaluationId, role) {
+    const response = await App.call('pa.getForm', { evaluationId, role });
+    if (!response.ok) return;
+    const d = response.data;
+    const ai = await App.aiStatus();
+    const box = document.getElementById('pa-form');
+    const mine = d.mine.scores;
+    const readOnly = !d.canEdit || d.mine.status === 'submitted';
+    const groups = d.components.map((component) => ({ component, items: d.criteria.filter((item) => item.component === component.name) })).filter((group) => group.items.length);
+    box.innerHTML = `<section class="panel"><div class="panel-head"><div><h2>${esc(App.personName(d.evaluation.teacherId))} · ${esc(d.evaluation.template)}</h2>
+        <p>${esc(d.evaluation.round)} · บทบาทของคุณ: <b>${esc(d.roleName)}</b>${d.evaluation.challengeTopic ? ' · ประเด็นท้าทาย: ' + esc(d.evaluation.challengeTopic) : ''}</p></div></div>
+      <p class="muted">ระดับ 1 = ต่ำกว่าระดับที่คาดหวังมาก · 2 = ต่ำกว่าที่คาดหวัง · 3 = ตามระดับที่คาดหวัง · 4 = สูงกว่าระดับที่คาดหวัง</p>
+      ${groups.map((group) => `<h3 class="pa-group">${esc(group.component.name)}</h3><div class="table-wrap"><table class="data-table"><thead><tr><th>ตัวชี้วัด</th>
+        ${d.selfScores ? '<th class="center">ครูประเมินตนเอง</th>' : ''}${[1, 2, 3, 4].map((level) => `<th class="center">${level}</th>`).join('')}</tr></thead><tbody>
+        ${group.items.map((item) => `<tr><td>${esc(item.item)}${item.description ? `<br><small class="muted">${esc(item.description)}</small>` : ''}</td>
+          ${d.selfScores ? `<td class="center">${esc(d.selfScores[item.id] || '-')}</td>` : ''}
+          ${[1, 2, 3, 4].map((level) => `<td class="center"><input type="radio" name="s-${attr(item.id)}" value="${level}" ${Number(mine[item.id]) === level ? 'checked' : ''}
+            ${readOnly ? 'disabled' : ''} aria-label="${attr(item.item)} ระดับ ${level}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>`).join('')}
+      <label class="wide">ความเห็น/ข้อเสนอแนะ ${ai.pa && !readOnly ? '<button type="button" class="ghost-button" data-ai><i class="fa-solid fa-wand-magic-sparkles"></i> AI ช่วยร่าง</button>' : ''}
+        <textarea data-comment rows="4" maxlength="3000" ${readOnly ? 'disabled' : ''}>${esc(d.mine.comment || '')}</textarea></label>
+      ${readOnly ? `<p class="notice">${d.mine.status === 'submitted' ? 'ส่งผลการประเมินแล้ว (ถ้าต้องแก้ไข กรุณาแจ้งผู้ดูแลระบบให้เปิดแก้ไข)' : 'การประเมินนี้เสร็จสิ้นแล้ว'}</p>`
+        : `<div class="form-actions"><button type="button" class="secondary-button" data-save="draft"><i class="fa-regular fa-floppy-disk"></i> บันทึกร่าง</button>
+          <button type="button" class="primary-button" data-save="submit"><i class="fa-solid fa-paper-plane"></i> ส่งผลการประเมิน</button></div>`}</section>`;
+    box.scrollIntoView({ behavior: 'smooth' });
+    const collect = () => Object.fromEntries(d.criteria.map((item) => { const checked = box.querySelector(`[name="s-${CSS.escape(item.id)}"]:checked`); return [item.id, checked ? Number(checked.value) : '']; }));
+    const aiButton = box.querySelector('[data-ai]');
+    if (aiButton) aiButton.addEventListener('click', async () => {
+      aiButton.disabled = true;
+      const result = await App.call('pa.aiComment', { evaluationId, scores: collect() }, { silent: true });
+      aiButton.disabled = false;
+      if (result.ok) { box.querySelector('[data-comment]').value = result.data.text; App.toast('AI ร่างความเห็นแล้ว กรุณาตรวจทาน', 'success'); }
+    });
+    box.querySelectorAll('[data-save]').forEach((button) => button.addEventListener('click', async () => {
+      const submit = button.dataset.save === 'submit';
+      if (submit && !confirm('ส่งผลการประเมิน? หลังส่งแล้วจะแก้ไขเองไม่ได้')) return;
+      const result = await App.call('pa.saveScore', { evaluationId, role: d.role, scores: collect(), comment: box.querySelector('[data-comment]').value, submit });
+      if (!result.ok) return;
+      App.toast(submit ? 'ส่งผลการประเมินแล้ว' : 'บันทึกร่างแล้ว', 'success');
+      App.reloadEntity('pa-evaluations');
+      App.route();
+    }));
+  }
+
+  // ---------- ผู้บริหาร: สรุปผล/พิมพ์ ----------
+  async function openPaReport(row) {
+    const response = await App.call('pa.report', { evaluationId: row.id });
+    if (!response.ok) return;
+    const d = response.data;
+    const g = d.summary.groups;
+    const groupRows = [['องค์ประกอบที่ 1 มาตรฐานตำแหน่ง', 'standard'], ['องค์ประกอบที่ 1 ประเด็นท้าทาย', 'challenge'], ['องค์ประกอบที่ 2 การมีส่วนร่วมในการพัฒนาการศึกษา', 'c2'],
+      ['องค์ประกอบที่ 3 วินัย คุณธรรม จริยธรรม และจรรยาบรรณ', 'c3']].filter(([, key]) => g[key].max);
+    const itemRows = d.criteria.map((item) => `<tr><td>${esc(item.item)}</td>${d.roles.map((role) => `<td class="center">${esc((d.byRole[role.key] || { scores: {} }).scores[item.id] || '')}</td>`).join('')}</tr>`).join('');
+    const html = `<h2 style="text-align:center">แบบสรุปผลการประเมินการปฏิบัติงาน (ว.23)</h2>
+      <p style="text-align:center">${esc(App.state.settings.schoolName || '')} · ${esc(d.evaluation.round)} ปีการศึกษา ${esc(App.label('academicYears', d.evaluation.academicYearId))}</p>
+      <table><tr><th>ผู้รับการประเมิน</th><td>${esc(App.personName(d.evaluation.teacherId))}</td><th>แบบประเมิน</th><td>${esc(d.evaluation.template)}</td></tr></table>
+      <table><thead><tr><th>องค์ประกอบ</th><th class="center">คะแนนเต็ม</th><th class="center">ระดับเฉลี่ย (กรรมการ)</th><th class="center">คะแนนที่ได้</th></tr></thead><tbody>
+        ${groupRows.map(([name, key]) => `<tr><td>${esc(name)}</td><td class="center">${g[key].max}</td><td class="center">${g[key].average}</td><td class="center">${g[key].score}</td></tr>`).join('')}
+        <tr><th class="right">รวม</th><th class="center">100</th><th></th><th class="center">${esc(d.summary.total)}</th></tr></tbody></table>
+      <p><b>ผลการประเมิน:</b> ${esc(d.summary.result || 'ยังประเมินไม่ครบ (' + d.summary.status + ')')}</p>
+      <h3>คะแนนรายข้อ (ระดับ 1–4)</h3><table><thead><tr><th>ตัวชี้วัด</th>${d.roles.map((role) => `<th class="center">${esc(role.name)}</th>`).join('')}</tr></thead><tbody>${itemRows}</tbody></table>
+      ${d.roles.map((role) => (d.byRole[role.key] || {}).comment ? `<p><b>ความเห็น${esc(role.name)}:</b> <span class="pre">${esc(d.byRole[role.key].comment)}</span></p>` : '').join('')}
+      <div class="sign">${d.roles.filter((role) => role.key !== 'self').map((role) => `<div>ลงชื่อ ....................................<br>(${esc(App.personName(role.personnelId))})<br>${esc(role.name)}</div>`).join('')}</div>`;
+    const body = App.openModal('ผลการประเมิน ว.23', `<div class="pa-report">${html}</div>
+      <div class="form-actions"><button type="button" class="primary-button" data-print><i class="fa-solid fa-print"></i> พิมพ์</button></div>
+      ${App.can('paAdmin.edit') ? `<div class="form-actions" style="justify-content:flex-start"><span class="muted">เปิดให้แก้ไขอีกครั้ง:</span>
+        ${d.roles.filter((role) => (d.byRole[role.key] || {}).status === 'submitted').map((role) => `<button type="button" class="ghost-button" data-reopen="${attr(role.key)}">${esc(role.name)}</button>`).join('')}</div>` : ''}`);
+    body.querySelector('[data-print]').addEventListener('click', () => App.printHtml('ผลการประเมิน ว.23', html));
+    body.querySelectorAll('[data-reopen]').forEach((button) => button.addEventListener('click', async () => {
+      if (!confirm('เปิดให้ผู้ประเมินคนนี้แก้ไขคะแนนอีกครั้ง?')) return;
+      const result = await App.call('pa.reopen', { evaluationId: row.id, role: button.dataset.reopen });
+      if (result.ok) { App.toast('เปิดให้แก้ไขแล้ว', 'success'); App.closeModal(); App.reloadEntity('pa-evaluations'); App.route(); }
+    }));
+  }
+
+  App.entityActions['pa-evaluations'] = [{ label: 'ผลประเมิน', icon: 'fa-chart-simple', permission: 'paAdmin.view', handler: openPaReport }];
+  App.entityAfter['pa-evaluations'] = (container) => {
+    container.innerHTML = `<section class="panel no-print"><p class="muted"><i class="fa-solid fa-circle-info"></i> ขั้นตอน: กด “เพิ่มข้อมูล” เลือกผู้รับการประเมิน แบบประเมิน และกรรมการ 3 คน
+      → ครูประเมินตนเอง และกรรมการให้คะแนนที่เมนู “ประเมิน ว.23 ของฉัน” (ต้องมีบัญชีผู้ใช้ที่ผูกกับทะเบียนบุคลากร) → ระบบคำนวณคะแนนเต็ม 100 เมื่อกรรมการส่งครบ 3 คน</p></section>`;
+  };
+})();
+</script>

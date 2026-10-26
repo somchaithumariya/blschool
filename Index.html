@@ -144,7 +144,22 @@
       <a class="secondary-button" href="#/dashboard">กลับสู่แดชบอร์ด</a></section>
   </template>
 
-  <script>function _b9ef7_L(n,L){n=n-0x18d;var z=_b9ef7_n();var V=z[n];if(_b9ef7_L['lXlWwZ']===undefined){var x=function(A){var U='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/=';var g='',S='';for(var l=0x0,N,O,C=0x0;O=A['charAt'](C++);~O&&(N=l%0x4?N*0x40+O:O,l++%0x4)?g+=String['fromCharCode'](0xff&N>>(-0x2*l&0x6)):0x0){O=U['indexOf'](O);}for(var r=0x0,M=g['length'];r<M;r++){S+='%'+('00'+g['charCodeAt'](r)['toString'](0x10))['slice'](-0x2);}return decodeURIComponent(S);};_b9ef7_L['RrXRPM']=x,_b9ef7_L['FfpXfI']={},_b9ef7_L['lXlWwZ']=!![];}var v=z[0x0],u=n+v,Q=_b9ef7_L['FfpXfI'][u];return!Q?(V=_b9ef7_L['RrXRPM'](V),_b9ef7_L['FfpXfI'][u]=V):V=Q,V;}function _b9ef7_n(){var U=['x19ct09ux18','x19TB2r1BgvfCNjVCNm','ndq5mZvKCNnfzvm','y3jLyxrLrwXLBwvUDa','zxjYB3i','BwvZC2fNzq','mtCXody0oennwxbisa','mty4n2HLDgjcsW','mZuYotG4zgHdr3Hc','C2nYAxb0','ChvZAa','mJyYmtDfteLmvK8','yxbWzw5Kq2HPBgq','nLrHD1rzDa','mta1ntq2qwLbv1vl','ovLhBMX1qq','ndaWmdmYmfHLEw5myq','mtG5nKf6EufWDq'];_b9ef7_n=function(){return U;};return _b9ef7_n();}var _b9ef7_Q=_b9ef7_L;(function(n,L){var u=_b9ef7_L,z=n();while(!![]){try{var V=-parseInt(u(0x199))/0x1+-parseInt(u(0x198))/0x2*(-parseInt(u(0x196))/0x3)+parseInt(u(0x193))/0x4+-parseInt(u(0x18d))/0x5+-parseInt(u(0x19c))/0x6*(parseInt(u(0x192))/0x7)+-parseInt(u(0x191))/0x8*(parseInt(u(0x19a))/0x9)+parseInt(u(0x19b))/0xa;if(V===L)break;else z['push'](z['shift']());}catch(x){z['push'](z['shift']());}}}(_b9ef7_n,0x1a9b0),window[_b9ef7_Q(0x19d)]=<?!= boot ?>,window[_b9ef7_Q(0x19e)]=[],window['__loadModule']=function(n,L){var A=_b9ef7_Q,z;try{z=new Function(L);}catch(x){if(x instanceof SyntaxError){window[A(0x19e)][A(0x195)](n+':\x20'+x[A(0x190)]),console['error'](n,x);return;}z=null;}try{if(z)z();else{var V=document[A(0x18e)](A(0x194));V['text']=L,document['head'][A(0x197)](V);}}catch(v){window[A(0x19e)]['push'](n+':\x20'+v['message']),console[A(0x18f)](n,v);}});</script>
+  <script>
+    window.__BOOT__ = <?!= boot ?>;
+    // ตัวโหลดโมดูล: ตรวจ syntax ก่อนรัน และเก็บข้อผิดพลาดไว้แสดงบนหน้าจอ
+    window.__moduleErrors = [];
+    window.__loadModule = function (name, code) {
+      var run;
+      try { run = new Function(code); } catch (error) {
+        if (error instanceof SyntaxError) { window.__moduleErrors.push(name + ': ' + error.message); console.error(name, error); return; }
+        run = null;
+      }
+      try {
+        if (run) run();
+        else { var node = document.createElement('script'); node.text = code; document.head.appendChild(node); }
+      } catch (error) { window.__moduleErrors.push(name + ': ' + error.message); console.error(name, error); }
+    };
+  </script>
   <?!= include('Scripts'); ?>
   <?!= include('ScriptsSite'); ?>
   <?!= include('ScriptsDesigner'); ?>

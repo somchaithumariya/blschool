@@ -1,0 +1,152 @@
+<script>
+/**
+ * ความปลอดภัย: ภาพรวม (สถิติ แผนที่ เหตุที่ยังไม่ปิด) + AI วิเคราะห์ + แนะนำกิจกรรม SPS
+ * เมนูแจ้งเหตุ/จุดเสี่ยง/แผน SPS เป็นเมนูแบบฟอร์มกลาง (Config.gs) ส่วนนี้เพิ่มปุ่มเฉพาะทาง
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const esc = App.esc;
+  const attr = App.attr;
+  const GROUP_COLORS = ['#f97316', '#dc2626', '#7c3aed', '#0ea5e9'];
+
+  App.register('#/safety-dashboard', async () => {
+    const yearId = App.yearIdOrActive();
+    const response = await App.call('safety.dashboard', { academicYearId: yearId });
+    if (!response.ok) return App.renderError(response.error);
+    const d = response.data;
+    const ai = await App.aiStatus();
+    const groups = Object.entries(d.incidents.byCategory);
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-shield-heart c-rose"></i> ภาพรวมความปลอดภัย</h2>
+        <p>เหตุความไม่ปลอดภัย จุดเสี่ยง แผนกิจกรรม SPS การส่งต่อ และ SOS ของปีการศึกษาที่เลือก</p></div>
+        <div class="actions no-print"><label>ปีการศึกษา<select data-year>${App.yearOptions(yearId)}</select></label>
+          ${ai.safety ? '<button type="button" class="primary-button" data-ai><i class="fa-solid fa-wand-magic-sparkles"></i> AI วิเคราะห์ภาพรวม</button>' : ''}
+          <button type="button" class="secondary-button" data-suggest><i class="fa-solid fa-lightbulb"></i> แนะนำกิจกรรม SPS</button></div></div></section>
+      <section class="stat-grid">
+        ${App.statCard('purple', 'เหตุทั้งหมด', d.incidents.total, 'fa-triangle-exclamation', 'ยังไม่ปิด ' + d.incidents.open + ' เรื่อง')}
+        ${App.statCard('amber', 'จุดเสี่ยง', d.risks.total, 'fa-helmet-safety', 'แก้ไขแล้ว ' + d.risks.fixed + ' · เกินกำหนด ' + d.risks.overdue)}
+        ${App.statCard('green', 'กิจกรรม SPS', d.plan.total, 'fa-list-check', 'เสร็จสิ้น ' + (d.plan.byStatus['เสร็จสิ้น'] || 0))}
+        ${App.statCard('blue', 'ส่งต่อหน่วยงานภายนอก', d.referrals.external, 'fa-share-from-square', 'ภายใน ' + d.referrals.internal + ' · SOS ที่ยังเปิด ' + d.sos.open)}
+      </section>
+      <section class="chart-grid">
+        <article class="chart-card"><header><div><h3>เหตุตามกลุ่มภัย (SPS 4 ด้าน)</h3></div></header>
+          ${App.barList(groups.map(([name, value], index) => [name, value, GROUP_COLORS[index % 4]]))}</article>
+        <article class="chart-card"><header><div><h3>ประเภทภัยที่พบบ่อย</h3></div></header>${App.barList(d.incidents.topTypes.map((item) => [item.name, item.count]), '#f97316')}</article>
+        <article class="chart-card"><header><div><h3>จุดเสี่ยงตามระดับ</h3></div></header>
+          ${App.barList(Object.entries(d.risks.byLevel).map(([name, value]) => [name, value, name === 'สูงมาก' ? '#b91c1c' : name === 'สูง' ? '#ef4444' : name === 'ปานกลาง' ? '#f59e0b' : '#22c55e']))}</article>
+        <article class="chart-card"><header><div><h3>เหตุรายเดือน</h3></div></header>
+          ${App.barList(Object.keys(d.incidents.byMonth).sort().map((month) => [App.fmtDate(month + '-01').replace(/^1 /, ''), d.incidents.byMonth[month]]), '#0ea5e9')}</article>
+      </section>
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-bell c-rose"></i> เหตุที่ยังไม่ปิดเรื่อง</h2></div>
+        <a class="secondary-button" href="#/safety-incidents">ดูทั้งหมด</a></div>
+        ${App.simpleTable(['วันที่', 'กลุ่มภัย', 'ประเภท', 'ความรุนแรง', 'สถานที่', 'สถานะ'], d.recent.map((row) => [App.fmtDate(row.incidentDate), row.category, row.hazardType, row.severity, row.location, row.status]))}</section>
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-map-location-dot c-green"></i> แผนที่เหตุและจุดเสี่ยง</h2>
+        <p>แสดงเฉพาะรายการที่มีพิกัด · สีแดง = เหตุการณ์ สีส้ม = จุดเสี่ยง</p></div></div>
+        <div id="safety-map" class="map-box">${d.points.length ? '<p class="muted">กำลังโหลดแผนที่…</p>' : '<p class="muted">ยังไม่มีรายการที่ระบุพิกัด</p>'}</div></section>
+      <div id="sps-suggest"></div>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { App.state.yearId = event.target.value; App.route(); });
+    const aiButton = root.querySelector('[data-ai]');
+    if (aiButton) aiButton.addEventListener('click', () => App.showAi('AI วิเคราะห์ภาพรวมความปลอดภัย', 'safety.analyzeDashboard', { academicYearId: yearId }));
+    root.querySelector('[data-suggest]').addEventListener('click', () => suggest(yearId));
+    if (d.points.length) {
+      App.renderMap(document.getElementById('safety-map'), d.points.map((point) => ({ lat: point.lat, lng: point.lng, color: point.kind === 'risk' ? '#f59e0b' : '#dc2626',
+        html: `<b>${esc(point.label)}</b><br>${esc(point.location || '')}<br>${App.fmtDate(point.date)} · ${esc(point.status || '')}` })), d.school);
+    }
+  });
+
+  async function suggest(yearId) {
+    const box = document.getElementById('sps-suggest');
+    box.innerHTML = '<section class="panel"><p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> กำลังวิเคราะห์สถิติ…</p></section>';
+    const response = await App.call('safety.suggestPlan', { academicYearId: yearId }, { silent: true, quiet: true });
+    if (!response.ok) { box.innerHTML = `<section class="panel"><p class="form-error">${esc(App.messageOf(response.error))}</p></section>`; return; }
+    const list = response.data.suggestions;
+    const canAdd = App.can('safety.edit');
+    box.innerHTML = `<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-lightbulb c-amber"></i> กิจกรรม SPS ที่แนะนำ</h2>
+      <p>${response.data.aiUsed ? 'เรียบเรียงโดย AI จากสถิติจริง — กรุณาตรวจทาน' : 'แนะนำจากสถิติเหตุการณ์จริง (ยังไม่ได้ใช้ AI)'}</p></div></div>
+      ${list.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>กลุ่มภัย</th><th>กิจกรรม</th><th>เหตุผล</th><th></th></tr></thead><tbody>
+        ${list.map((item, index) => `<tr><td>${esc(item.category)}</td><td>${esc(item.activity)}</td><td>${esc(item.reason)}</td>
+          <td>${canAdd ? `<button type="button" class="secondary-button" data-add="${index}"><i class="fa-solid fa-plus"></i> เพิ่มลงแผน</button>` : ''}</td></tr>`).join('')}
+        </tbody></table></div>` : '<p class="muted">ยังไม่มีสถิติเหตุการณ์เพียงพอ กรุณาเพิ่มกิจกรรมเองตามบริบทของโรงเรียน</p>'}</section>`;
+    box.querySelectorAll('[data-add]').forEach((button) => button.addEventListener('click', () => {
+      const item = list[Number(button.dataset.add)];
+      App.openEntityForm('sps-plan', null, () => { button.disabled = true; button.textContent = 'เพิ่มแล้ว'; },
+        { academicYearId: yearId, category: item.category, activity: item.activity, objective: item.reason });
+    }));
+  }
+
+  // ปุ่มในแถวของเมนูแจ้งเหตุ: AI วิเคราะห์ และถอดบทเรียน (AAR) จากเหตุการณ์
+  App.entityActions['safety-incidents'] = [
+    { label: 'AI', icon: 'fa-wand-magic-sparkles', permission: 'safety.view', handler: async (row) => {
+      const ai = await App.aiStatus();
+      if (!ai.safety) return App.toast('AI ความปลอดภัยยังไม่เปิดใช้งาน (เมนู "ตั้งค่า AI")', 'error');
+      App.showAi('AI วิเคราะห์เหตุการณ์', 'safety.analyzeIncident', { id: row.id });
+    } },
+    { label: 'AAR', icon: 'fa-lightbulb', permission: 'care.edit', handler: (row) => {
+      // ผูก AAR กับเหตุนี้ (เหตุรุนแรง/วิกฤตต้องมี AAR ก่อนปิดเรื่อง)
+      aarSource = row.id;
+      App.openEntityForm('aar', null, () => { aarSource = ''; App.toast('บันทึก AAR แล้ว ดูได้ที่เมนู "ถอดบทเรียน AAR" ตอนนี้ปิดเรื่องได้แล้ว', 'success'); },
+        { academicYearId: row.academicYearId, aarDate: App.todayIso(), context: 'ความปลอดภัย', eventName: (row.hazardType || row.category || 'เหตุการณ์') + ' — ' + row.location,
+          actual: row.description });
+    } }
+  ];
+  let aarSource = '';
+  App.entityBeforeSave['aar'] = (payload, row) => {
+    if (!row && aarSource) payload.sourceId = aarSource;
+    return true;
+  };
+
+  // ---------- แยกบทบาท: ครูแจ้งได้ · ผู้รับผิดชอบอัปเดตความคืบหน้า · ทีมความปลอดภัย (safety.manage) มอบหมายและปิดเรื่อง ----------
+  const SAFETY_FIRST = { 'safety-incidents': 'รับแจ้ง', 'safety-risks': 'รอดำเนินการ' };
+  Object.keys(SAFETY_FIRST).forEach((key) => {
+    App.entityFormReady[key] = (form, row) => {
+      if (App.can('safety.manage')) return;
+      const mine = App.state.user.personnelId;
+      const responsible = row && mine && row.responsibleId === mine;
+      const note = document.createElement('p');
+      note.className = 'muted wide';
+      note.style.margin = '0';
+      form.elements.responsibleId.disabled = true;
+      if (!responsible) form.elements.status.disabled = true;
+      if (!row) form.elements.status.value = SAFETY_FIRST[key];
+      note.innerHTML = '<i class="fa-solid fa-circle-info"></i> ' + (responsible
+        ? 'คุณเป็นผู้รับผิดชอบเรื่องนี้ อัปเดตสถานะและผลการแก้ไขได้ ส่วนการปิดเรื่องและเปลี่ยนผู้รับผิดชอบทำโดยทีมความปลอดภัย'
+        : 'ทีมความปลอดภัยจะรับเรื่อง มอบหมายผู้รับผิดชอบ และติดตามจนปิดเรื่อง');
+      form.prepend(note);
+    };
+  });
+
+  // ---------- ปุ่ม "แจ้งเหตุ" บนแถบด้านบน: เลือกแจ้งเหตุการณ์หรือจุดเสี่ยง แล้วเปิดฟอร์มทันที ----------
+  const QUICK = [
+    { key: 'safety-incidents', icon: 'fa-triangle-exclamation', tone: 'incident', title: 'แจ้งเหตุการณ์ / อุบัติเหตุ',
+      hint: 'เกิดเหตุแล้ว เช่น นักเรียนได้รับบาดเจ็บ ทะเลาะวิวาท ถูกรังแก', date: 'incidentDate' },
+    { key: 'safety-risks', icon: 'fa-helmet-safety', tone: 'risk', title: 'แจ้งจุดเสี่ยง',
+      hint: 'สิ่งที่อาจทำให้เกิดอันตราย เช่น พื้นลื่น สายไฟชำรุด รั้วพัง', date: 'foundDate' }
+  ];
+  App.openQuickReport = () => {
+    const items = QUICK.filter((item) => App.state.entities[item.key] && App.can(App.state.entities[item.key].editPermission));
+    if (!items.length) return App.toast('บัญชีนี้ยังไม่มีสิทธิ์แจ้งเหตุ กรุณาแจ้งผู้ดูแลระบบ', 'error');
+    const body = App.openModal('แจ้งเหตุ', `<p class="muted" style="margin-top:0">ถ้าเป็นเหตุฉุกเฉินที่ต้องการความช่วยเหลือทันที ให้กดปุ่ม <b class="c-rose">SOS</b> แทน</p>
+      <div class="quick-report">${items.map((item) => `<button type="button" class="quick-tile ${item.tone}" data-quick="${attr(item.key)}">
+        <i class="fa-solid ${item.icon}"></i><strong>${esc(item.title)}</strong><small>${esc(item.hint)}</small></button>`).join('')}</div>`);
+    body.querySelectorAll('[data-quick]').forEach((button) => button.addEventListener('click', () => {
+      const item = QUICK.find((entry) => entry.key === button.dataset.quick);
+      const module = App.state.modules.find((entry) => entry.key === item.key);
+      const defaults = { academicYearId: App.yearIdOrActive(), [item.date]: App.todayIso(), status: SAFETY_FIRST[item.key] };
+      App.openEntityForm(item.key, null, () => {
+        App.forget('dashboard:map');
+        if (module && location.hash !== module.route) location.hash = module.route; else App.route();
+      }, defaults);
+    }));
+  };
+
+  const reportButton = document.getElementById('report-top-button');
+  reportButton.addEventListener('click', () => App.openQuickReport());
+  const previousAfterRoute = App.afterRoute;
+  App.afterRoute = (module) => {
+    if (previousAfterRoute) previousAfterRoute(module);
+    const can = !!App.state.user && QUICK.some((item) => App.state.entities[item.key] && App.can(App.state.entities[item.key].editPermission));
+    reportButton.classList.toggle('hidden', !can);
+  };
+})();
+</script>

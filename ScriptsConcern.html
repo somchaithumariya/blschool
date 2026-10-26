@@ -1,0 +1,260 @@
+<script>
+/**
+ * ห้องรับฟังนักเรียน (#/student-concerns): กล่องรับเรื่องที่นักเรียนส่งผ่านหน้า ?page=concern
+ * ทีมดูแล (concern.view) อ่านเรื่อง · ตอบกลับนักเรียนผ่านรหัสติดตาม · มอบผู้ดูแล/นัดติดตาม/บันทึกภายใน · สร้างบันทึกให้คำปรึกษา (5.4)
+ * ผู้ดูแลระบบสร้างลิงก์/QR สำหรับนักเรียนและตั้งค่าการรับเรื่องได้ที่นี่
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+  const URGENCY_TONE = { 'ฉุกเฉิน': 'danger', 'เร่งด่วน': 'warning', 'ปกติ': 'info' };
+  const FILTERS = [['open', 'ที่ยังไม่ปิด'], ['waiting', 'รอรับเรื่อง'], ['unread', 'ข้อความใหม่'], ['urgent', 'เร่งด่วน/ฉุกเฉิน'], ['mine', 'ของฉัน'], ['closed', 'ปิดเรื่องแล้ว'], ['all', 'ทั้งหมด']];
+  const ui = { yearId: '', filter: 'open', topic: '', q: '' };
+  let state = null; // ข้อมูลล่าสุดจากเซิร์ฟเวอร์ { rows, stats, canEdit, ... }
+
+  const isOpen = (row) => row.status !== 'ปิดเรื่อง';
+  const badge = (urgency) => `<span class="badge ${URGENCY_TONE[urgency] || 'info'}">${esc(urgency)}</span>`;
+  const whoText = (row) => row.studentName ? `${row.studentName}${row.studentRoom ? ' · ' + row.studentRoom : ''}`
+    : row.claimedStudent ? 'ระบุชื่อ (ยังไม่ยืนยัน)' : 'ไม่ระบุตัวตน';
+
+  App.register('#/student-concerns', async () => {
+    ui.yearId = ui.yearId || App.yearIdOrActive();
+    const response = await App.call('concern.inbox', { academicYearId: ui.yearId });
+    if (!response.ok) return App.renderError(response.error);
+    state = response.data;
+    paint();
+  });
+
+  function visible() {
+    const q = ui.q.trim().toLowerCase();
+    return state.rows.filter((row) => {
+      if (ui.filter === 'open' && !isOpen(row)) return false;
+      if (ui.filter === 'waiting' && !(isOpen(row) && row.status === 'รอรับเรื่อง')) return false;
+      if (ui.filter === 'unread' && !row.hasNewMessage) return false;
+      if (ui.filter === 'urgent' && !(isOpen(row) && row.urgency !== 'ปกติ')) return false;
+      if (ui.filter === 'mine' && !(isOpen(row) && state.myPersonnelId && row.assigneeId === state.myPersonnelId)) return false;
+      if (ui.filter === 'closed' && isOpen(row)) return false;
+      if (ui.topic && row.topic !== ui.topic) return false;
+      return !q || [row.topic, row.trackingCode, row.studentName, row.claimedStudent, row.assigneeName, row.message].some((text) => String(text || '').toLowerCase().includes(q));
+    });
+  }
+
+  function paint() {
+    const s = state.stats;
+    const rows = visible();
+    App.content(`<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-ear-listen c-rose"></i> ห้องรับฟังนักเรียน</h2>
+        <p>เรื่องที่นักเรียนบอกผ่านหน้า “ห้องรับฟัง” · อ่านได้เฉพาะผู้ที่ได้รับสิทธิ์ และทุกครั้งที่เปิดอ่านจะมีบันทึกการใช้งาน</p></div>
+        <div class="actions no-print"><label>ปีการศึกษา<select data-year>${App.yearOptions(ui.yearId)}</select></label>
+          <button type="button" class="secondary-button" data-share><i class="fa-solid fa-qrcode"></i> ลิงก์และ QR ให้นักเรียน</button></div></div></section>
+      <section class="stat-grid">
+        ${App.statCard('amber', 'รอรับเรื่อง', s.waiting, 'fa-inbox', 'ยังไม่มีครูรับเรื่อง')}
+        ${App.statCard('blue', 'ข้อความใหม่จากนักเรียน', s.unread, 'fa-message', 'นักเรียนส่งข้อความต่อ')}
+        ${App.statCard('purple', 'เร่งด่วน/ฉุกเฉิน', s.urgent, 'fa-triangle-exclamation', 'ฉุกเฉิน ' + s.emergency + ' · ที่ยังไม่ปิด')}
+        ${App.statCard('green', 'เรื่องที่ยังเปิดอยู่', s.open, 'fa-folder-open', 'ทั้งหมด ' + s.total + ' เรื่อง')}
+      </section>
+      <section class="panel">
+        <div class="cn-filters no-print"><div class="chip-list">${FILTERS.map(([key, name]) => `<button type="button" class="cn-filter ${ui.filter === key ? 'on' : ''}" data-filter="${key}">${name}</button>`).join('')}</div>
+          <select data-topic aria-label="หัวข้อ"><option value="">ทุกหัวข้อ</option>${state.topics.map((topic) => `<option ${ui.topic === topic ? 'selected' : ''}>${esc(topic)}</option>`).join('')}</select>
+          <input type="search" data-q placeholder="ค้นหารหัส ชื่อ หัวข้อ" value="${attr(ui.q)}" aria-label="ค้นหา"></div>
+        <div class="cn-list">${rows.length ? rows.map(cardHtml).join('') : '<p class="muted empty-row">ไม่มีเรื่องในมุมมองนี้</p>'}</div>
+        ${state.total > state.rows.length ? `<p class="muted">แสดง ${state.rows.length} จาก ${state.total} เรื่อง (เรียงตามความเร่งด่วน)</p>` : ''}
+        <p class="cn-privacy"><i class="fa-solid fa-shield-halved"></i> รายการไม่แสดงเนื้อหาเรื่อง เปิดอ่านได้โดยกดที่เรื่องนั้น · อย่าเปิดเรื่องของนักเรียนต่อหน้าผู้อื่น</p>
+      </section>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-year]').addEventListener('change', (event) => { ui.yearId = event.target.value; App.state.yearId = event.target.value; App.route(); });
+    root.querySelector('[data-share]').addEventListener('click', openShare);
+    root.querySelectorAll('[data-filter]').forEach((button) => button.addEventListener('click', () => { ui.filter = button.dataset.filter; paint(); }));
+    root.querySelector('[data-topic]').addEventListener('change', (event) => { ui.topic = event.target.value; paint(); });
+    const search = root.querySelector('[data-q]');
+    search.addEventListener('input', () => {
+      ui.q = search.value;
+      root.querySelector('.cn-list').innerHTML = visible().map(cardHtml).join('') || '<p class="muted empty-row">ไม่มีเรื่องในมุมมองนี้</p>';
+      bindCards(root);
+    });
+    bindCards(root);
+  }
+
+  function cardHtml(row) {
+    return `<article class="cn-card ${row.urgency === 'ฉุกเฉิน' ? 'emergency' : row.urgency === 'เร่งด่วน' ? 'urgent' : ''} ${isOpen(row) ? '' : 'closed'}" data-id="${attr(row.id)}" tabindex="0" role="button">
+      <div class="cn-card-top">${badge(row.urgency)} <strong>${esc(row.topic)}</strong>
+        ${row.hasNewMessage ? '<span class="cn-new"><i class="fa-solid fa-circle"></i> ข้อความใหม่</span>' : ''}<span class="cn-code">${esc(row.trackingCode)}</span></div>
+      <div class="cn-card-meta"><span>${App.fmtDate(row.receivedDate)}</span><span><i class="fa-solid fa-user"></i> ${esc(whoText(row))}</span>
+        <span class="badge">${esc(row.status)}</span>${row.assigneeName ? `<span><i class="fa-solid fa-user-shield"></i> ${esc(row.assigneeName)}</span>` : ''}
+        ${row.followUpDate && isOpen(row) ? `<span><i class="fa-solid fa-calendar-check"></i> นัด ${App.fmtDate(row.followUpDate)}</span>` : ''}</div></article>`;
+  }
+
+  function bindCards(root) {
+    root.querySelectorAll('.cn-card').forEach((card) => {
+      const open = () => openDetail(state.rows.find((row) => row.id === card.dataset.id));
+      card.addEventListener('click', open);
+      card.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+    });
+  }
+
+  function replaceRow(row) {
+    const index = state.rows.findIndex((item) => item.id === row.id);
+    if (index >= 0) state.rows[index] = row;
+    return row;
+  }
+
+  function threadHtml(row) {
+    const first = `<div class="cn-bubble first"><small>เรื่องที่นักเรียนเล่า · ${App.fmtDate(row.receivedDate)} · ${esc(row.aboutWho || '')}</small>${esc(row.message)}</div>`;
+    return first + row.thread.map((entry) => `<div class="cn-bubble ${entry.by === 't' ? 'staff' : 'student'}"><small>${esc(entry.by === 't' ? entry.name || 'ครู' : 'นักเรียน')} · ${App.fmtDateTime(entry.at)}</small>${esc(entry.text)}</div>`).join('');
+  }
+
+  function openDetail(row) {
+    if (!row) return;
+    const edit = state.canEdit;
+    const body = App.openModal('เรื่องจากห้องรับฟัง · ' + row.trackingCode, `<div class="cn-detail">
+      <div class="cn-meta">${badge(row.urgency)} <span class="badge">${esc(row.status)}</span> <span class="muted">${App.fmtDate(row.receivedDate)} · ${esc(row.topic)}</span></div>
+      <div class="cn-who">${row.studentName ? `<div><i class="fa-solid fa-user-graduate"></i> <strong>${esc(row.studentName)}</strong>${row.studentRoom ? ' · ' + esc(row.studentRoom) : ''}
+            ${App.can('care.view') ? ' <button type="button" class="link-button" data-care>เปิดแฟ้มดูแล</button>' : ''}</div>
+          <small class="muted">ระบบจับคู่จากเลขประจำตัวและชื่อที่นักเรียนกรอก ควรยืนยันตัวตนตอนพูดคุยก่อนนำข้อมูลไปใช้</small>`
+        : row.claimedStudent ? `<div><i class="fa-solid fa-user-question"></i> ผู้แจ้งระบุว่า: ${esc(row.claimedStudent)}</div>`
+        : '<div><i class="fa-solid fa-user-secret"></i> <strong>ไม่ระบุตัวตน</strong> · ตอบกลับได้ผ่านรหัสติดตามเท่านั้น</div>'}
+        ${row.contactNote ? `<div><i class="fa-solid fa-clock"></i> ติดต่อกลับ: ${esc(row.contactNote)}</div>` : ''}
+        ${row.preferred && row.preferred !== 'ใครก็ได้' ? `<div><i class="fa-solid fa-comments"></i> อยากคุยกับ: ${esc(row.preferred)}</div>` : ''}</div>
+      ${row.urgency !== 'ปกติ' ? `<div class="cn-alert"><i class="fa-solid fa-triangle-exclamation"></i> ระดับ${esc(row.urgency)}: รีบพูดคุยกับนักเรียนโดยเร็ว หากเกี่ยวกับความปลอดภัยของชีวิตหรือการถูกทำร้าย ให้แจ้งผู้บริหารและประสานหน่วยงาน (สายด่วน 1323 · 1300 · 191)</div>` : ''}
+      <div class="cn-thread" data-thread>${threadHtml(row)}</div>
+      ${edit ? `<form class="cn-reply" data-reply novalidate><label>ตอบกลับนักเรียน <small class="muted">(นักเรียนอ่านได้เมื่อใส่รหัสติดตาม · ไม่ใส่ชื่อ/ข้อมูลของคนอื่น)</small>
+          <textarea name="text" rows="3" maxlength="1500" placeholder="พิมพ์ข้อความถึงนักเรียน"></textarea></label><p class="field-error" data-error-for="text"></p>
+          <div class="actions"><button type="submit" class="primary-button"><i class="fa-solid fa-paper-plane"></i> ส่งตอบกลับ</button></div></form>` : ''}
+      <form class="cn-manage form-grid" data-manage novalidate>
+        <label>สถานะ<select name="status" ${edit ? '' : 'disabled'}>${state.statuses.map((status) => `<option ${row.status === status ? 'selected' : ''}>${esc(status)}</option>`).join('')}</select>
+          <span class="field-error" data-error-for="status"></span></label>
+        <label>ผู้ดูแลเรื่องนี้<select name="assigneeId" ${edit ? '' : 'disabled'}>${App.options('personnel', row.assigneeId)}</select></label>
+        <label>วันนัดติดตาม<input type="date" name="followUpDate" value="${attr(row.followUpDate)}" ${edit ? '' : 'disabled'}></label>
+        <label class="wide">บันทึกภายในของทีม <small class="muted">(นักเรียนไม่เห็น)</small>
+          <textarea name="internalNote" rows="3" maxlength="3000" ${edit ? '' : 'disabled'}>${esc(row.internalNote)}</textarea><span class="field-error" data-error-for="internalNote"></span></label>
+        ${edit ? `<div class="wide actions"><button type="submit" class="primary-button"><i class="fa-solid fa-floppy-disk"></i> บันทึก</button>
+          ${state.canCounsel ? `<button type="button" class="secondary-button" data-counsel title="${row.studentId ? '' : 'ต้องรู้ตัวนักเรียนก่อน'}" ${row.studentId ? '' : 'disabled'}>
+            <i class="fa-solid fa-comments"></i> ${row.counselingId ? 'เปิดบันทึกให้คำปรึกษา (5.4)' : 'สร้างบันทึกให้คำปรึกษา (5.4)'}</button>` : ''}
+          <button type="button" class="danger-button" data-remove title="ลบเรื่องส่งซ้ำหรือสแปม"><i class="fa-solid fa-trash"></i> ลบ</button></div>
+          <p class="wide muted" style="margin:0"><i class="fa-solid fa-circle-info"></i> บันทึก 5.4 ที่สร้างให้จะไม่คัดลอกข้อความของนักเรียน (บันทึก 5.4 ครูหลายคนเปิดดูได้) · เรื่องเร่งด่วน/ฉุกเฉินต้องมีบันทึกภายในหรือบันทึก 5.4 ก่อนปิดเรื่อง</p>` : ''}
+      </form></div>`);
+    const manage = body.querySelector('[data-manage]');
+    const current = { row };
+    const refresh = (next) => { current.row = replaceRow(next); };
+
+    if (edit && row.hasNewMessage) {
+      App.call('concern.update', { id: row.id, version: row.version, markRead: true }, { silent: true, quiet: true }).then((response) => {
+        if (response.ok) { refresh(response.data); App.forget('dashboard'); }
+      });
+    }
+    const care = body.querySelector('[data-care]');
+    if (care) care.addEventListener('click', () => {
+      const store = App.cached('ui:student-care') || App.remember('ui:student-care', { homeroomId: '', studentId: '', tab: 'student-family' });
+      store.studentId = row.studentId;
+      location.hash = '#/student-care';
+    });
+    const reply = body.querySelector('[data-reply]');
+    if (reply) reply.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      App.clearErrors(reply);
+      const button = reply.querySelector('button[type="submit"]');
+      button.disabled = true;
+      const response = await App.call('concern.reply', { id: row.id, version: current.row.version, text: reply.elements.text.value }, { silent: true, quiet: true });
+      button.disabled = false;
+      if (!response.ok) return App.showErrors(reply, response.error), App.toast(App.messageOf(response.error), 'error');
+      refresh(response.data);
+      App.forget('dashboard');
+      App.toast('ส่งตอบกลับแล้ว นักเรียนจะเห็นเมื่อใส่รหัสติดตาม', 'success');
+      openDetail(current.row);
+      paint();
+    });
+    manage.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!edit) return;
+      App.clearErrors(manage);
+      const response = await App.call('concern.update', { id: row.id, version: current.row.version, status: manage.elements.status.value,
+        assigneeId: manage.elements.assigneeId.value, followUpDate: manage.elements.followUpDate.value, internalNote: manage.elements.internalNote.value },
+      { silent: true, quiet: true });
+      if (!response.ok) return App.showErrors(manage, response.error), App.toast(App.messageOf(response.error), 'error');
+      refresh(response.data);
+      App.forget('dashboard');
+      App.closeModal();
+      App.toast('บันทึกแล้ว', 'success');
+      App.route();
+    });
+    const counsel = body.querySelector('[data-counsel]');
+    if (counsel) counsel.addEventListener('click', async () => {
+      if (current.row.counselingId) { App.pendingOpen = { entity: 'counseling', id: current.row.counselingId }; location.hash = '#/counseling'; return; }
+      counsel.disabled = true;
+      const response = await App.call('concern.toCounseling', { id: row.id, version: current.row.version }, { silent: true, quiet: true });
+      if (!response.ok) { counsel.disabled = false; return App.toast(App.messageOf(response.error), 'error'); }
+      refresh(response.data.row);
+      App.forget('dashboard');
+      App.forget('entity:counseling:' + row.academicYearId);
+      App.toast('สร้างบันทึกให้คำปรึกษา (5.4) แล้ว กำลังเปิดให้กรอกรายละเอียด', 'success');
+      App.pendingOpen = { entity: 'counseling', id: response.data.counselingId };
+      location.hash = '#/counseling';
+    });
+    const remove = body.querySelector('[data-remove]');
+    if (remove) remove.addEventListener('click', async () => {
+      if (!confirm('ลบเรื่องนี้? (ใช้กับเรื่องส่งซ้ำหรือสแปมเท่านั้น)')) return;
+      const response = await App.call('entity.delete', { entity: 'student-concerns', id: row.id, version: current.row.version }, { silent: true, quiet: true });
+      if (!response.ok) return App.toast(App.messageOf(response.error), 'error');
+      App.forget('dashboard');
+      App.closeModal();
+      App.toast('ลบแล้ว', 'success');
+      App.route();
+    });
+  }
+
+  // ---------- ลิงก์/QR ให้นักเรียน และตั้งค่า ----------
+  async function openShare() {
+    const response = await App.call('concern.config', null, { silent: true, quiet: true });
+    if (!response.ok) return App.toast(App.messageOf(response.error), 'error');
+    const { config, publicUrl, canConfigure } = response.data;
+    const body = App.openModal('ลิงก์และ QR สำหรับนักเรียน', `<div class="cn-share">
+      <p class="muted" style="margin-top:0">นักเรียนสแกน QR หรือเปิดลิงก์นี้ได้เลย <b>ไม่ต้องเข้าสู่ระบบ</b> และเป็นหน้าเล็กที่เปิดเร็ว แนะนำให้ติดโปสเตอร์ที่ห้องพยาบาล ห้องแนะแนว และหน้าห้องเรียน</p>
+      <div class="cn-share-row"><div class="cn-qr" data-qr aria-label="QR code"></div>
+        <div class="grow"><label>ลิงก์สำหรับนักเรียน<input type="text" readonly value="${attr(publicUrl)}" data-url></label>
+          <div class="actions" style="margin-top:8px"><button type="button" class="secondary-button" data-copy><i class="fa-solid fa-copy"></i> คัดลอกลิงก์</button>
+            <button type="button" class="primary-button" data-poster><i class="fa-solid fa-print"></i> พิมพ์โปสเตอร์ A4</button></div></div></div>
+      <form class="form-grid cn-config" data-config novalidate ${canConfigure ? '' : 'hidden'}>
+        <h3 class="wide" style="margin:6px 0 0">ตั้งค่าการรับเรื่อง</h3>
+        <label class="check wide"><input type="checkbox" name="enabled" ${config.enabled ? 'checked' : ''}> เปิดรับเรื่องจากนักเรียน</label>
+        <label class="check wide"><input type="checkbox" name="allowAnonymous" ${config.allowAnonymous ? 'checked' : ''}> อนุญาตให้ส่งแบบไม่ระบุตัวตน (แนะนำ)</label>
+        <label>รับได้สูงสุดต่อวัน (เรื่อง)<input type="number" name="dailyLimit" min="10" max="2000" value="${attr(config.dailyLimit)}"><span class="field-error" data-error-for="dailyLimit"></span></label>
+        <label class="wide">ข้อความต้อนรับบนหน้านักเรียน (ไม่เกิน 300 ตัวอักษร เว้นว่าง = ใช้ข้อความมาตรฐาน)
+          <textarea name="introText" rows="2" maxlength="300">${esc(config.introText)}</textarea><span class="field-error" data-error-for="introText"></span></label>
+        <div class="wide actions"><button type="submit" class="primary-button"><i class="fa-solid fa-floppy-disk"></i> บันทึกการตั้งค่า</button></div>
+      </form>
+      <p class="muted" style="margin-bottom:0"><i class="fa-solid fa-bell"></i> ถ้าตั้งค่า LINE/Telegram ไว้ ระบบจะแจ้งทีมเมื่อมีเรื่องใหม่ (เฉพาะระดับความเร่งด่วนและรหัส ไม่ส่งเนื้อหาหรือชื่อ) เปิด/ปิดได้ที่เมนู “เชื่อมต่อระบบภายนอก”</p></div>`);
+    const url = body.querySelector('[data-url]');
+    let qrCanvas = null;
+    const QRCode = await App.loadQr();
+    const qr = body.querySelector('[data-qr]');
+    if (QRCode && qr) {
+      new QRCode(qr, { text: publicUrl, width: 168, height: 168, correctLevel: QRCode.CorrectLevel.M });
+      qrCanvas = qr.querySelector('canvas');
+    } else if (qr) qr.innerHTML = '<span class="muted">สร้าง QR ไม่ได้ (ตรวจอินเทอร์เน็ต)</span>';
+    body.querySelector('[data-copy]').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(publicUrl); } catch (error) { url.select(); document.execCommand('copy'); }
+      App.toast('คัดลอกลิงก์แล้ว', 'success');
+    });
+    body.querySelector('[data-poster]').addEventListener('click', () => {
+      const settings = App.state.settings || {};
+      const image = qrCanvas ? `<img src="${attr(qrCanvas.toDataURL('image/png'))}" alt="QR code" style="width:300px;height:300px">` : '';
+      App.printHtml('โปสเตอร์ห้องรับฟัง', `<div class="center" style="padding-top:20px">
+        <h1 style="font-size:46px;margin:0">ห้องรับฟัง</h1><p style="font-size:22px;margin:4px 0 24px">${esc(settings.schoolName || '')}</p>
+        <p style="font-size:26px;margin:0 0 18px"><b>มีเรื่องไม่สบายใจ? บอกครูได้ที่นี่</b></p>
+        <p style="font-size:20px;margin:0 0 24px">ไม่ต้องบอกชื่อก็ได้ · มีเฉพาะครูที่ดูแลนักเรียนเท่านั้นที่ได้อ่าน · ครูตอบกลับให้</p>
+        ${image}<p style="font-size:20px;margin:18px 0 6px">สแกน QR ด้วยกล้องมือถือ</p><p style="font-size:14px;word-break:break-all;margin:0 40px 28px">${esc(publicUrl)}</p>
+        <div style="border:3px solid #000;border-radius:14px;padding:12px;margin:0 40px"><p style="font-size:20px;margin:0"><b>ต้องการคุยทันที? โทรฟรี ตลอด 24 ชั่วโมง</b></p>
+          <p style="font-size:30px;margin:6px 0 0"><b>สายด่วนสุขภาพจิต 1323</b></p><p style="font-size:18px;margin:4px 0 0">ศูนย์ช่วยเหลือสังคม 1300 · ตำรวจ 191 · เจ็บป่วยฉุกเฉิน 1669</p></div></div>`);
+    });
+    const form = body.querySelector('[data-config]');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      App.clearErrors(form);
+      const saved = await App.call('concern.saveConfig', { enabled: form.elements.enabled.checked, allowAnonymous: form.elements.allowAnonymous.checked,
+        dailyLimit: form.elements.dailyLimit.value, introText: form.elements.introText.value }, { silent: true, quiet: true });
+      if (!saved.ok) return App.showErrors(form, saved.error), App.toast(App.messageOf(saved.error), 'error');
+      App.toast('บันทึกการตั้งค่าแล้ว', 'success');
+    });
+  }
+})();
+</script>

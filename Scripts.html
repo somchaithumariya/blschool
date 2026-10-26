@@ -1,0 +1,631 @@
+<script>
+/**
+ * แกนหลักของหน้าเว็บ: สถานะ, การเรียกเซิร์ฟเวอร์, เมนูแบบหมวด, เส้นทาง (route) และเครื่องมือกลาง
+ * หน้าแต่ละกลุ่มอยู่ในไฟล์ Scripts*.html อื่น ๆ และลงทะเบียนผ่าน App.register(route, handler)
+ */
+(function () {
+  'use strict';
+
+  const ROLE_NAMES = { admin: 'ผู้ดูแลระบบ', teacher: 'ครู', executive: 'ผู้บริหาร' };
+  // รหัสโรงเรียน (ลิงก์ ?s=...) ทุกโรงเรียนใช้โดเมนเดียวกัน จึงแยกชื่อที่เก็บในเบราว์เซอร์ตามโรงเรียน
+  const TENANT = (window.__BOOT__ && window.__BOOT__.tenant) || '';
+  const storageKey = (name) => TENANT ? name + '@' + TENANT : name;
+  const storedToken = () => { try { return sessionStorage.getItem(storageKey('schoolSessionToken')) || localStorage.getItem(storageKey('schoolRememberToken')) || ''; } catch (error) { return ''; } };
+  const state = { tenant: TENANT, baseUrl: (window.__BOOT__ && window.__BOOT__.baseUrl) || '', token: storedToken(), settings: {}, user: null, modules: [],
+    configurableModules: [], groups: [], entities: {}, lookups: null, requiresPasswordChange: false, cache: {}, yearId: '', texts: {} };
+  const routes = {};
+  const el = {};
+
+  const App = window.App = { state, routes, entityActions: {} };
+
+  document.addEventListener('DOMContentLoaded', initialize);
+
+  async function initialize() {
+    ['loading-overlay','toast-region','login-view','login-form','login-error','forced-password-view','forced-password-form',
+      'forced-password-error','forced-logout-button','app-shell','sidebar','drawer-backdrop','sidebar-navigation',
+      'sidebar-school-name','logout-button','menu-button','page-title','page-subtitle','page-content','user-name','user-role',
+      'user-avatar','sidebar-avatar','sidebar-user-name','sidebar-user-roles','app-footer','modal','modal-title','modal-body',
+      'sos-top-button','login-footer'].forEach((id) => { el[toCamel(id)] = document.getElementById(id); });
+    el.loginForm.addEventListener('submit', handleLogin);
+    el.forcedPasswordForm.addEventListener('submit', handleForcedPasswordChange);
+    el.forcedLogoutButton.addEventListener('click', handleLogout);
+    el.logoutButton.addEventListener('click', handleLogout);
+    el.menuButton.addEventListener('click', toggleMenu);
+    el.drawerBackdrop.addEventListener('click', closeDrawer);
+    el.sosTopButton.addEventListener('click', () => App.openSos && App.openSos());
+    document.getElementById('register-button').addEventListener('click', openRegister);
+    document.querySelectorAll('[data-reveal]').forEach((button) => button.addEventListener('click', () => {
+      const input = document.getElementById(button.dataset.reveal);
+      input.type = input.type === 'password' ? 'text' : 'password';
+    }));
+    window.addEventListener('hashchange', route);
+    // Apps Script ใส่ base target=_top ทำให้ลิงก์ #/เมนู เปิดทั้งหน้าใหม่เป็นจอขาว จึงเปลี่ยน hash เองภายในกรอบ
+    document.addEventListener('click', (event) => {
+      const link = event.target.closest && event.target.closest('a[href^="#/"]');
+      if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      event.preventDefault();
+      const target = link.getAttribute('href');
+      if (location.hash === target) route(); else location.hash = target;
+    });
+    if ((window.__moduleErrors || []).length) {
+      toast('บางส่วนของระบบโหลดไม่สำเร็จ กรุณาแจ้งผู้ดูแลระบบ:\n' + window.__moduleErrors.join('\n'), 'error');
+    }
+    const boot = window.__BOOT__ || {};
+    state.landing = boot.landing || null;
+    if (!state.landing && !boot.appMode && App.refreshLanding) App.refreshLanding();
+    if (boot.settings) applyBranding(boot.settings);
+    else { const response = await request('public.settings', null, false); if (response.ok) applyBranding(response.data); }
+    if (state.token) await restoreSession();
+    if (!state.user && !state.requiresPasswordChange) showLogin();
+    if (boot.demoPending) runDemoLoad('demo.step', false);
+  }
+
+  // สร้างข้อมูลตัวอย่างเป็นขั้น ๆ พร้อมแถบความคืบหน้า (เรียกซ้ำจนเสร็จ)
+  async function runDemoLoad(action, useToken, onDone) {
+    let bar = document.getElementById('demo-progress');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'demo-progress';
+      bar.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:9999;background:#0f172a;color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.3);max-width:92vw;text-align:center';
+      document.body.appendChild(bar);
+    }
+    for (let round = 0; round < 80; round += 1) {
+      const response = await request(action, null, useToken);
+      if (!response.ok) { bar.textContent = 'สร้างข้อมูลตัวอย่างไม่สำเร็จ: ' + (response.error && response.error.message || ''); setTimeout(() => bar.remove(), 8000); return false; }
+      const info = response.data || {};
+      bar.textContent = 'กำลังสร้างข้อมูลตัวอย่าง ' + (info.percent || 0) + '% — ' + (info.label || '');
+      if (info.done || info.pending === false) {
+        bar.textContent = 'สร้างข้อมูลตัวอย่างเสร็จแล้ว กำลังรีเฟรช…';
+        if (onDone) onDone(); else setTimeout(() => location.reload(), 1200);
+        return true;
+      }
+      if (info.busy) await new Promise((resolve) => setTimeout(resolve, 4000));
+    }
+    return false;
+  }
+
+  // ---------- การเรียกเซิร์ฟเวอร์ ----------
+  // เวลาของคำขอล่าสุด (เซิร์ฟเวอร์ใช้จริง / รวมที่ผู้ใช้รอ) แสดงในศูนย์ผู้ดูแลระบบ
+  const timings = [];
+  function request(action, data, useToken = true) {
+    const begun = Date.now();
+    return new Promise((resolve) => {
+      google.script.run.withSuccessHandler((response) => {
+        timings.unshift({ action, server: response && response.ms, total: Date.now() - begun, at: begun });
+        timings.length = Math.min(timings.length, 40);
+        if (response && !response.ok && response.error && response.error.code === 'UNAUTHENTICATED' && state.user) {
+          clearSession(); showLogin(); toast(response.error.message, 'error');
+        }
+        resolve(response || { ok: false, error: { code: 'EMPTY', message: 'ไม่ได้รับข้อมูลจากเซิร์ฟเวอร์', fieldErrors: {} } });
+      }).withFailureHandler((error) => resolve({ ok: false, data: null,
+        error: { code: 'NETWORK_ERROR', message: 'ไม่สามารถติดต่อเซิร์ฟเวอร์ได้' + (error && error.message ? '\n' + error.message : ''), fieldErrors: {} } }))
+        .api({ action, token: useToken ? state.token : '', data, tenant: state.tenant });
+    });
+  }
+
+  // เรียกพร้อมแสดงสถานะกำลังโหลด และแจ้งข้อผิดพลาดให้เอง
+  async function call(action, data, options = {}) {
+    const seq = routeSeq;
+    if (!options.silent) setLoading(true);
+    const response = await request(action, data);
+    if (!options.silent) setLoading(false);
+    // ผู้ใช้เปลี่ยนหน้าไปแล้วระหว่างรอ: ไม่ต้องทำต่อ (คำสั่งบนเซิร์ฟเวอร์ทำเสร็จแล้วตามปกติ แค่ไม่แสดงผลทับหน้าใหม่)
+    if (seq !== routeSeq) { if (!response.ok && !options.quiet) toast(messageOf(response.error), 'error'); return new Promise(() => {}); }
+    if (!response.ok && !options.quiet) toast(messageOf(response.error), 'error');
+    return response;
+  }
+
+  // ---------- เข้าสู่ระบบ ----------
+  // เปิดหน้าใหม่/รีเฟรช: แสดงเมนูจากครั้งก่อนทันที แล้วค่อยอัปเดตจากเซิร์ฟเวอร์เบื้องหลัง
+  async function restoreSession() {
+    const saved = readSavedState();
+    if (saved) {
+      applyApplicationState(saved);
+      showApplication();
+      const fresh = await request('app.state');
+      if (!state.token) return;
+      if (fresh.ok) { applyApplicationState(fresh.data); renderNavigation(); }
+      else if (fresh.error && fresh.error.code === 'PASSWORD_CHANGE_REQUIRED') showForcedPassword();
+      return;
+    }
+    setLoading(true);
+    const response = await request('app.state');
+    setLoading(false);
+    if (!response.ok) {
+      if (response.error && response.error.code === 'PASSWORD_CHANGE_REQUIRED') { showForcedPassword(); return; }
+      clearSession(); return;
+    }
+    applyApplicationState(response.data);
+    showApplication();
+  }
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    clearErrors(el.loginForm);
+    el.loginError.textContent = '';
+    const form = new FormData(event.currentTarget);
+    setLoading(true);
+    const response = await request('auth.login', { username: form.get('username'), password: form.get('password'), remember: !!form.get('remember') }, false);
+    if (!response.ok) { setLoading(false); showErrors(el.loginForm, response.error); el.loginError.textContent = response.error.message; return; }
+    state.token = response.data.token;
+    sessionStorage.setItem(storageKey('schoolSessionToken'), state.token);
+    // จดจำการเข้าสู่ระบบบนเครื่องนี้ (แอปมือถือ): เก็บไว้หลังปิดเบราว์เซอร์ จนกว่าเซสชันหมดอายุหรือออกจากระบบ
+    try { if (form.get('remember')) localStorage.setItem(storageKey('schoolRememberToken'), state.token); else localStorage.removeItem(storageKey('schoolRememberToken')); } catch (error) { /* ignore */ }
+    state.user = response.data.user;
+    if (state.user.mustChangePassword) { setLoading(false); showForcedPassword(); return; }
+    let appState = response.data.state;
+    if (!appState) {
+      const appResponse = await request('app.state');
+      if (!appResponse.ok) { setLoading(false); el.loginError.textContent = appResponse.error.message; clearSession(); return; }
+      appState = appResponse.data;
+    }
+    setLoading(false);
+    applyApplicationState(appState);
+    showApplication();
+    toast('เข้าสู่ระบบแล้ว', 'success');
+  }
+
+  async function handleLogout() {
+    setLoading(true);
+    await request('auth.logout');
+    setLoading(false);
+    clearSession();
+    showLogin();
+    if (App.refreshLanding) App.refreshLanding();
+  }
+
+  async function handleForcedPasswordChange(event) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setLoading(true);
+    const response = await request('auth.changePassword', Object.fromEntries(form.entries()));
+    if (!response.ok) { setLoading(false); el.forcedPasswordError.textContent = messageOf(response.error); return; }
+    const appResponse = await request('app.state');
+    setLoading(false);
+    if (!appResponse.ok) { el.forcedPasswordError.textContent = appResponse.error.message; return; }
+    applyApplicationState(appResponse.data);
+    showApplication();
+    toast('เปลี่ยนรหัสผ่านแล้ว', 'success');
+  }
+
+  function readSavedState() {
+    try { return JSON.parse(sessionStorage.getItem(storageKey('schoolAppState')) || 'null'); } catch (error) { return null; }
+  }
+
+  function applyApplicationState(data) {
+    try { sessionStorage.setItem(storageKey('schoolAppState'), JSON.stringify(data)); } catch (error) { /* พื้นที่ไม่พอ ใช้งานต่อได้ */ }
+    state.requiresPasswordChange = false;
+    state.user = data.user;
+    state.externalLinks = data.externalLinks || [];
+    state.lockedModules = data.lockedModules || [];
+    state.menuPresets = data.menuPresets || [];
+    state.landingSections = data.landingSections || [];
+    state.landingFonts = data.landingFonts || [];
+    state.ai = data.ai || null;
+    state.bots = data.bots || [];
+    // สถานะ AI เปลี่ยนได้เมื่อข้อมูลล่าสุดมาถึงหลังเปิดหน้า: ให้ปุ่มน้องบอทแสดง/ซ่อนตามค่าล่าสุด
+    if (App.syncBot) setTimeout(App.syncBot, 0);
+    // ระบบภายนอกแสดงเป็นเมนูในหมวดที่ผู้ดูแลระบบเลือก (เส้นทาง #/ext-รหัส)
+    state.modules = (data.modules || []).concat(state.externalLinks.filter((link) => /^https:\/\//i.test(link.url)).map((link) => ({
+      key: 'ext-' + link.id, name: link.name, category: link.category, route: '#/ext-' + String(link.id).toLowerCase().replace(/[^a-z0-9-]/g, ''),
+      icon: link.icon, color: link.color, external: true, url: link.url, openMode: link.openMode, description: link.description
+    }))).filter((module) => safeRoute(module.route));
+    state.configurableModules = data.configurableModules || [];
+    state.groups = data.groups || [];
+    state.themes = data.themes || [];
+    state.entities = data.entities || {};
+    state.texts = (data.settings && data.settings.uiTexts && typeof data.settings.uiTexts === 'object') ? data.settings.uiTexts : {};
+    applyTexts();
+    state.lookups = data.lookups || null;
+    const years = (state.lookups && state.lookups.academicYears) || [];
+    const active = years.find((year) => year.isActive);
+    if (!years.some((year) => year.id === state.yearId)) state.yearId = active ? active.id : (years[0] ? years[0].id : '');
+    applyBranding(data.settings);
+  }
+
+  // ---------- ข้อความที่ผู้ดูแลระบบแก้ไขเอง (โหมดแก้ไขข้อความ) ----------
+  // m:เมนู g:หมวด e:หัวตาราง f:ช่องข้อมูล d:คำอธิบายหน้า s:ข้อความทั่วไป (data-tk)
+  function t(key, fallback) { return (state.texts && state.texts[key]) || fallback; }
+  function applyTexts() {
+    const texts = state.texts || {};
+    state.modules.forEach((module) => { if (module.defaultName === undefined) module.defaultName = module.name; module.name = texts['m:' + module.key] || module.defaultName; });
+    state.groups.forEach((group) => { if (group.defaultName === undefined) group.defaultName = group.name; group.name = texts['g:' + group.key] || group.defaultName; });
+    Object.keys(state.entities).forEach((key) => {
+      const entity = state.entities[key];
+      if (entity.defaultLabel === undefined) entity.defaultLabel = entity.label;
+      entity.label = texts['e:' + key] || entity.defaultLabel;
+      (entity.fields || []).forEach((field) => { if (field.defaultLabel === undefined) field.defaultLabel = field.label; field.label = texts['f:' + key + '.' + field.key] || field.defaultLabel; });
+    });
+    applyStaticTexts();
+  }
+  function applyStaticTexts() {
+    const texts = state.texts || {};
+    document.querySelectorAll('[data-tk]').forEach((node) => {
+      if (node.dataset.tkDefault === undefined) node.dataset.tkDefault = node.textContent;
+      node.textContent = texts['s:' + node.dataset.tk] || node.dataset.tkDefault;
+    });
+  }
+
+  function applyBranding(settings) {
+    state.settings = Object.assign({}, state.settings, settings || {});
+    const s = state.settings;
+    if (!state.user && s.uiTexts && typeof s.uiTexts === 'object') { state.texts = s.uiTexts; applyStaticTexts(); }
+    applyTheme(s.primaryColor, s.sidebarColor);
+    document.getElementById('register-link').classList.toggle('hidden', s.allowSelfRegistration !== true);
+    document.getElementById('login-title').textContent = s.schoolName || 'ระบบบริหารจัดการโรงเรียน';
+    document.getElementById('login-description').textContent = s.schoolDescription || 'ระบบบริหารจัดการโรงเรียน';
+    el.loginFooter.textContent = '© ' + (new Date().getFullYear() + 543) + ' ' + (s.footerText || s.schoolName || '');
+    document.querySelectorAll('.school-mark,.brand-mark').forEach((mark) => {
+      if (s.logoFileId) {
+        mark.style.backgroundImage = `url("${App.imageUrl ? App.imageUrl(s.logoFileId, 300) : 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(s.logoFileId) + '&sz=w300'}")`;
+        mark.textContent = '';
+      } else { mark.style.backgroundImage = ''; mark.textContent = (s.schoolName || 'ร').replace(/^โรงเรียน/, '').slice(0, 1); }
+    });
+    el.sidebarSchoolName.textContent = s.schoolName || 'ระบบโรงเรียน';
+    el.appFooter.textContent = s.footerText || '';
+    document.title = s.schoolName || 'ระบบบริหารจัดการโรงเรียน';
+    if (App.renderLanding) App.renderLanding();
+    renderCredit();
+  }
+
+  // ข้อมูลผู้คิดค้นและพัฒนาระบบ (มาจากเซิร์ฟเวอร์ แก้ไขผ่านหน้าจอไม่ได้) ถ้าถูกลบออกจากหน้าจะใส่กลับให้
+  function renderCredit() {
+    const credit = (window.__BOOT__ && window.__BOOT__.credit) || null;
+    if (!credit || !credit.text) return;
+    const places = [['.site-footer', 'dev-credit'], ['#login-dialog .login-card, #login-dialog section', 'dev-credit login'], ['#app-footer', 'dev-credit app', true]];
+    places.forEach(([selector, className, after]) => {
+      const parent = document.querySelector(selector);
+      if (!parent) return;
+      const scope = after ? parent.parentElement : parent;
+      if (!scope.querySelector(':scope > [data-credit]')) {
+        const node = Object.assign(document.createElement('p'), { className });
+        node.setAttribute('data-credit', '');
+        if (after) parent.after(node); else parent.appendChild(node);
+      }
+    });
+    document.querySelectorAll('[data-credit]').forEach((node) => { if (node.textContent !== credit.text) node.textContent = credit.text; node.hidden = false; node.style.display = ''; });
+  }
+
+  function applyTheme(primaryColor, sidebarColor) {
+    const valid = (value) => /^#[0-9a-f]{6}$/i.test(String(value || ''));
+    document.documentElement.style.setProperty('--primary', valid(primaryColor) ? primaryColor : '#1e3a5f');
+    document.documentElement.style.setProperty('--nav-bg', valid(sidebarColor) ? sidebarColor : '#0f1b33');
+  }
+
+  // ---------- สมัครสมาชิก ----------
+  function closeLoginDialog() { const dialog = document.getElementById('login-dialog'); if (dialog && dialog.open) dialog.close(); }
+
+  function openRegister() {
+    closeLoginDialog();
+    const body = openModal('สมัครสมาชิก', `<form class="form-grid" novalidate>
+      <label>ชื่อผู้ใช้ (a-z 0-9) <span class="c-rose">*</span><input name="username" autocomplete="username" required><small class="field-error" data-error-for="username"></small></label>
+      <label>ชื่อ-นามสกุล <span class="c-rose">*</span><input name="displayName" required><small class="field-error" data-error-for="displayName"></small></label>
+      <label>เบอร์โทรศัพท์<input name="phone" inputmode="tel"><small class="field-error" data-error-for="phone"></small></label>
+      <label>อีเมล<input name="email" type="email"><small class="field-error" data-error-for="email"></small></label>
+      <label>รหัสผ่าน <span class="c-rose">*</span><input name="password" type="password" autocomplete="new-password" required><small class="field-error" data-error-for="password"></small></label>
+      <label>ยืนยันรหัสผ่าน <span class="c-rose">*</span><input name="confirm" type="password" autocomplete="new-password" required><small class="field-error" data-error-for="confirm"></small></label>
+      <p class="muted wide">หลังสมัคร ผู้ดูแลระบบจะตรวจสอบและกำหนดสิทธิ์ก่อนจึงจะเข้าใช้งานได้</p>
+      <p class="form-error wide" data-form-error></p>
+      <div class="form-actions wide"><button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+        <button type="submit" class="primary-button"><i class="fa-solid fa-user-plus"></i> สมัครสมาชิก</button></div></form>`);
+    const form = body.querySelector('form');
+    body.querySelector('[data-cancel]').addEventListener('click', closeModal);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearErrors(form);
+      const values = Object.fromEntries(new FormData(form).entries());
+      if (values.password !== values.confirm) { showErrors(form, { fieldErrors: { confirm: 'รหัสผ่านไม่ตรงกัน' } }); return; }
+      setLoading(true);
+      const response = await request('auth.register', values, false);
+      setLoading(false);
+      if (!response.ok) { showErrors(form, response.error); form.querySelector('[data-form-error]').textContent = response.error.message; return; }
+      body.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="fa-solid fa-circle-check c-green"></i></div><h2>ส่งคำขอสมัครแล้ว</h2><p>กรุณารอผู้ดูแลระบบอนุมัติ แล้วเข้าสู่ระบบด้วยชื่อผู้ใช้และรหัสผ่านที่ตั้งไว้</p></div>';
+    });
+  }
+
+  function showApplication() {
+    closeLoginDialog();
+    el.loginView.classList.add('hidden');
+    el.forcedPasswordView.classList.add('hidden');
+    el.appShell.classList.remove('hidden');
+    const name = state.user.displayName || state.user.username;
+    const roles = (state.user.roles || []).map((key) => ROLE_NAMES[key] || key);
+    el.userName.textContent = name; el.sidebarUserName.textContent = name;
+    el.userRole.textContent = roles.join(' , ');
+    el.sidebarUserRoles.innerHTML = roles.map((role) => `<span class="role-chip">${esc(role)}</span>`).join('');
+    el.userAvatar.textContent = name.slice(0, 1); el.sidebarAvatar.textContent = name.slice(0, 1);
+    renderNavigation();
+    // ลิงก์จากการแจ้งเตือน (เช่น ใบลารออนุมัติ): เปิดเมนูนั้นและรายการนั้นทันที (ครั้งเดียว)
+    const open = window.__BOOT__ && window.__BOOT__.open;
+    // รายงานที่ครูส่งถึงผู้บริหาร: เปิดหน้า "ส่งรายงานถึงผู้บริหาร" แล้วเปิดรายงานนั้น
+    if (open && !state.openConsumed && open.entity === 'report-reviews' && can('review.view')) {
+      state.openConsumed = true;
+      App.pendingReview = open.id;
+      if (location.hash === '#/report-reviews') route(); else location.hash = '#/report-reviews';
+      return;
+    }
+    if (open && !state.openConsumed && state.entities[open.entity] && can(state.entities[open.entity].viewPermission)) {
+      state.openConsumed = true;
+      App.pendingOpen = open;
+      const module = state.modules.find((item) => item.key === open.entity);
+      if (module) { if (location.hash === module.route) route(); else location.hash = module.route; return; }
+    }
+    if (!location.hash || location.hash === '#/') location.hash = '#/dashboard'; else route();
+  }
+
+  function showLogin() {
+    el.appShell.classList.add('hidden');
+    el.forcedPasswordView.classList.add('hidden');
+    el.loginView.classList.remove('hidden');
+    el.loginForm.reset();
+    el.loginError.textContent = '';
+  }
+
+  function showForcedPassword() {
+    state.requiresPasswordChange = true;
+    el.loginView.classList.add('hidden');
+    el.appShell.classList.add('hidden');
+    el.forcedPasswordView.classList.remove('hidden');
+    el.forcedPasswordForm.reset();
+    el.forcedPasswordError.textContent = '';
+  }
+
+  function clearSession() {
+    Object.assign(state, { token: '', user: null, modules: [], lookups: null, requiresPasswordChange: false, cache: {} });
+    sessionStorage.removeItem(storageKey('schoolSessionToken'));
+    sessionStorage.removeItem(storageKey('schoolAppState'));
+    try { localStorage.removeItem(storageKey('schoolRememberToken')); } catch (error) { /* ignore */ }
+  }
+
+  // ---------- เมนูแบบหมวด (พับ/กางได้ จำสถานะไว้ในเบราว์เซอร์) ----------
+  function openGroups() { try { return JSON.parse(localStorage.getItem(storageKey('navOpenGroups')) || '[]'); } catch (error) { return []; } }
+  function saveOpenGroups(keys) { try { localStorage.setItem(storageKey('navOpenGroups'), JSON.stringify(keys)); } catch (error) { /* ignore */ } }
+
+  // ลิงก์ของเมนู: ระบบภายนอกแบบ "แท็บใหม่" ชี้ไปที่เว็บนั้นโดยตรง
+  function moduleLinkAttrs(module) {
+    if (module.external && module.openMode !== 'embed') return `href="${attr(module.url)}" target="_blank" rel="noopener noreferrer"`;
+    return `href="${attr(module.route)}"`;
+  }
+
+  function navLink(module) {
+    return `<a class="nav-link" data-route="${attr(module.route)}" ${moduleLinkAttrs(module)}>
+      <i class="fa-solid ${attr(module.icon)} c-${attr(module.color || 'slate')}"></i><span data-tkey="m:${attr(module.key)}">${esc(module.name)}</span>${module.external && module.openMode !== 'embed' ? '<i class="fa-solid fa-arrow-up-right-from-square ext-mark"></i>' : ''}
+      ${module.key === 'app-center' ? `<span class="nav-count">${state.modules.length - 2}</span>` : ''}</a>`;
+  }
+
+  function renderNavigation() {
+    const open = openGroups();
+    const current = location.hash || '#/dashboard';
+    el.sidebarNavigation.innerHTML = state.groups.map((group) => {
+      const items = state.modules.filter((module) => module.category === group.key);
+      if (!items.length) return '';
+      if (group.key === 'top') return items.map(navLink).join('') + '<p class="nav-section-title">เมนูตามหมวด</p>';
+      const isOpen = open.includes(group.key) || items.some((module) => module.route === current);
+      return `<section class="nav-group ${isOpen ? 'open' : ''}" data-group="${attr(group.key)}">
+        <button type="button" class="nav-group-head"><span class="box"><i class="fa-solid ${attr(group.icon)}"></i></span>
+          <span class="label" data-tkey="g:${attr(group.key)}">${esc(group.name)}</span><span class="nav-count">${items.length}</span><i class="fa-solid fa-chevron-down chev"></i></button>
+        <div class="nav-group-items">${items.map(navLink).join('')}</div></section>`;
+    }).join('');
+    el.sidebarNavigation.querySelectorAll('.nav-group-head').forEach((button) => button.addEventListener('click', () => {
+      button.parentElement.classList.toggle('open');
+      saveOpenGroups([...el.sidebarNavigation.querySelectorAll('.nav-group.open')].map((node) => node.dataset.group));
+    }));
+    markActive();
+  }
+
+  function markActive() {
+    const hash = location.hash || '#/dashboard';
+    el.sidebarNavigation.querySelectorAll('.nav-link').forEach((link) => link.classList.toggle('active', link.dataset.route === hash));
+    const active = el.sidebarNavigation.querySelector('.nav-link.active');
+    const group = active && active.closest('.nav-group');
+    if (group && !group.classList.contains('open')) group.classList.add('open');
+  }
+
+  function toggleMenu() {
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      el.sidebar.classList.toggle('open'); el.drawerBackdrop.classList.toggle('hidden');
+    } else el.appShell.classList.toggle('collapsed');
+  }
+  function closeDrawer() { el.sidebar.classList.remove('open'); el.drawerBackdrop.classList.add('hidden'); }
+
+  // ---------- เส้นทาง ----------
+  function register(hash, handler) { routes[hash] = handler; }
+
+  let routeSeq = 0;
+  async function route() {
+    renderCredit();
+    if (!state.user) return;
+    routeSeq += 1;
+    closeDrawer();
+    if (el.modal.open) el.modal.close();
+    const hash = location.hash || '#/dashboard';
+    markActive();
+    const module = state.modules.find((item) => item.route === hash);
+    if (!module) {
+      const exists = routes[hash] || Object.values(state.entities).some((entity) => '#/' + entity.module === hash);
+      setPage(exists ? 'ไม่มีสิทธิ์เข้าถึง' : 'ไม่พบหน้า', '');
+      if (exists) renderForbidden();
+      else content('<section class="empty-state panel"><h2>ไม่พบหน้าที่ต้องการ</h2><a class="secondary-button" href="#/dashboard">กลับสู่แดชบอร์ด</a></section>');
+      return;
+    }
+    setPage(module.name, groupName(module.category));
+    el.pageTitle.dataset.tkey = 'm:' + module.key;
+    renderPageNote(module);
+    window.scrollTo(0, 0);
+    try {
+      if (routes[hash]) await routes[hash](module);
+      else if (module.external) App.renderExternal(module);
+      else if (state.entities[module.key]) await App.renderEntity(module.key, module);
+      else content('<section class="empty-state panel"><h2>หน้านี้ยังไม่พร้อมใช้งาน</h2></section>');
+      if (App.afterRoute) App.afterRoute(module);
+    } catch (error) {
+      console.error(error);
+      renderError({ message: 'เกิดข้อผิดพลาดในการแสดงผล: ' + error.message });
+    }
+  }
+
+  // คำอธิบายใต้ชื่อหน้า (ผู้ดูแลระบบเขียนเองได้ในโหมดแก้ไขข้อความ)
+  function renderPageNote(module) {
+    const note = document.getElementById('page-note');
+    if (!note) return;
+    const text = t('d:' + module.key, '');
+    note.dataset.tkey = 'd:' + module.key;
+    note.textContent = text;
+    note.classList.toggle('hidden', !text && !document.body.classList.contains('text-edit'));
+  }
+
+  function groupName(key) { const group = state.groups.find((item) => item.key === key); return group ? group.name : ''; }
+  function setPage(title, subtitle) { el.pageTitle.textContent = title; el.pageSubtitle.textContent = subtitle || ''; }
+  function content(html) { el.pageContent.innerHTML = html; return el.pageContent; }
+  function renderError(error) { content(`<section class="empty-state panel"><div class="empty-icon"><i class="fa-solid fa-triangle-exclamation"></i></div><h2>ไม่สามารถโหลดข้อมูลได้</h2><p>${esc(error.message)}</p></section>`); }
+  function renderForbidden() { el.pageContent.replaceChildren(document.getElementById('forbidden-template').content.cloneNode(true)); }
+
+  // ---------- สิทธิ์และข้อมูลอ้างอิง ----------
+  function can(permission) { const list = (state.user && state.user.permissions) || []; return list.includes(permission) || list.includes('*'); }
+
+  async function refreshLookups() {
+    const response = await request('lookups.get');
+    if (response.ok) state.lookups = response.data;
+    return state.lookups;
+  }
+
+  function lookupList(ref) { return (state.lookups && state.lookups[ref]) || []; }
+  function label(ref, id) {
+    if (id === '' || id === null || id === undefined) return '';
+    const item = lookupList(ref).find((entry) => String(entry.id) === String(id));
+    return item ? item.label : '';
+  }
+  function options(ref, selected, config = {}) {
+    let list = lookupList(ref);
+    if (config.yearId && ['homerooms', 'strategies', 'projects'].includes(ref)) list = list.filter((item) => String(item.academicYearId) === String(config.yearId));
+    const empty = config.empty === false ? '' : `<option value="">${esc(config.empty || '— เลือก —')}</option>`;
+    return empty + list.map((item) => `<option value="${attr(item.id)}" ${String(item.id) === String(selected) ? 'selected' : ''}>${esc((ref === 'students' && item.code ? item.code + ' ' : '') + item.label)}</option>`).join('');
+  }
+  function yearOptions(selected) { return options('academicYears', selected || state.yearId, { empty: false }); }
+  function personName(personnelId) { return label('personnel', personnelId); }
+
+  // ---------- เครื่องมือทั่วไป ----------
+  function setLoading(active) { el.loadingOverlay.classList.toggle('hidden', !active); }
+  function toast(message, type) {
+    const node = document.createElement('div');
+    node.className = `toast ${type || ''}`; node.textContent = message;
+    el.toastRegion.appendChild(node); setTimeout(() => node.remove(), type === 'error' ? 6000 : 3500);
+  }
+  function messageOf(error) {
+    const fields = Object.values((error && error.fieldErrors) || {}).filter((value) => typeof value === 'string');
+    return (error && error.message || '') + (fields.length ? '\n' + fields.join('\n') : '');
+  }
+  function clearErrors(scope) { (scope || document).querySelectorAll('.field-error').forEach((node) => { node.textContent = ''; }); }
+  function showErrors(scope, error) {
+    clearErrors(scope);
+    Object.entries((error && error.fieldErrors) || {}).forEach(([field, message]) => {
+      const target = (scope || document).querySelector(`[data-error-for="${CSS.escape(field)}"]`);
+      if (target && typeof message === 'string') target.textContent = message;
+    });
+  }
+  function openModal(title, html) {
+    el.modalTitle.textContent = title; el.modalBody.innerHTML = html;
+    if (!el.modal.open) el.modal.showModal();
+    return el.modalBody;
+  }
+  function closeModal() { if (el.modal.open) el.modal.close(); }
+  function esc(value) { const node = document.createElement('span'); node.textContent = String(value ?? ''); return node.innerHTML; }
+  function attr(value) { return esc(value).replace(/"/g, '&quot;'); }
+  function safeRoute(value) { return typeof value === 'string' && /^#\/[a-z0-9-]+$/.test(value); }
+  function toCamel(value) { return value.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()); }
+  const THAI_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  function fmtDate(value) {
+    if (!value) return '';
+    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return esc(value);
+    return `${Number(match[3])} ${THAI_MONTHS[Number(match[2]) - 1]} ${Number(match[1]) + 543}`;
+  }
+  function fmtDateTime(value) {
+    const date = new Date(value);
+    return isNaN(date) ? esc(value) : date.toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' });
+  }
+  function todayIso() { const now = new Date(); now.setMinutes(now.getMinutes() - now.getTimezoneOffset()); return now.toISOString().slice(0, 10); }
+  function num(value) { return Number(value || 0).toLocaleString('th-TH'); }
+  function groupBy(items, key) { return items.reduce((groups, item) => { (groups[item[key]] ||= []).push(item); return groups; }, {}); }
+
+  function csvCell(value) { const text = String(value ?? ''); return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text; }
+  // \u0e2a\u0e31\u0e48\u0e07\u0e14\u0e32\u0e27\u0e19\u0e4c\u0e42\u0e2b\u0e25\u0e14\u0e44\u0e1f\u0e25\u0e4c CSV \u0e41\u0e25\u0e30\u0e40\u0e1b\u0e34\u0e14\u0e2b\u0e19\u0e49\u0e32\u0e15\u0e48\u0e32\u0e07\u0e2a\u0e33\u0e23\u0e2d\u0e07\u0e44\u0e27\u0e49\u0e40\u0e2a\u0e21\u0e2d
+  // (\u0e2b\u0e19\u0e49\u0e32\u0e40\u0e27\u0e47\u0e1a\u0e02\u0e2d\u0e07 Apps Script \u0e2d\u0e22\u0e39\u0e48\u0e43\u0e19 iframe \u0e17\u0e35\u0e48\u0e1a\u0e32\u0e07\u0e40\u0e1a\u0e23\u0e32\u0e27\u0e4c\u0e40\u0e0b\u0e2d\u0e23\u0e4c/\u0e41\u0e2d\u0e1b\u0e21\u0e37\u0e2d\u0e16\u0e37\u0e2d/\u0e40\u0e1a\u0e23\u0e32\u0e27\u0e4c\u0e40\u0e0b\u0e2d\u0e23\u0e4c\u0e43\u0e19\u0e42\u0e1b\u0e23\u0e41\u0e01\u0e23\u0e21\u0e41\u0e0a\u0e17 \u0e1a\u0e25\u0e47\u0e2d\u0e01\u0e01\u0e32\u0e23\u0e14\u0e32\u0e27\u0e19\u0e4c\u0e42\u0e2b\u0e25\u0e14\u0e42\u0e14\u0e22\u0e44\u0e21\u0e48\u0e41\u0e08\u0e49\u0e07
+  //  \u0e1c\u0e39\u0e49\u0e43\u0e0a\u0e49\u0e08\u0e36\u0e07\u0e21\u0e35\u0e17\u0e32\u0e07\u0e40\u0e25\u0e37\u0e2d\u0e01: \u0e01\u0e14\u0e1b\u0e38\u0e48\u0e21\u0e14\u0e32\u0e27\u0e19\u0e4c\u0e42\u0e2b\u0e25\u0e14\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07 \u0e2b\u0e23\u0e37\u0e2d\u0e04\u0e31\u0e14\u0e25\u0e2d\u0e01\u0e44\u0e1b\u0e27\u0e32\u0e07\u0e43\u0e19 Google Sheets/Excel)
+  function downloadCsv(filename, header, rows, options = {}) {
+    const table = [header].concat(rows);
+    const csv = '\ufeff' + table.map((row) => row.map(csvCell).join(',')).join('\r\n');
+    const tsv = table.map((row) => row.map((cell) => String(cell ?? '').replace(/[\t\r\n]+/g, ' ')).join('\t')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    try { downloadBlob(blob, filename); } catch (error) { /* \u0e43\u0e0a\u0e49\u0e2b\u0e19\u0e49\u0e32\u0e15\u0e48\u0e32\u0e07\u0e2a\u0e33\u0e23\u0e2d\u0e07 */ }
+    const body = openModal('\u0e44\u0e1f\u0e25\u0e4c CSV \u0e1e\u0e23\u0e49\u0e2d\u0e21\u0e41\u0e25\u0e49\u0e27', `<p class="muted">${esc(filename)} \u00b7 ${num(Math.max(0, table.length - 1))} \u0e41\u0e16\u0e27<br>
+        \u0e2b\u0e32\u0e01\u0e40\u0e1a\u0e23\u0e32\u0e27\u0e4c\u0e40\u0e0b\u0e2d\u0e23\u0e4c\u0e44\u0e21\u0e48\u0e14\u0e32\u0e27\u0e19\u0e4c\u0e42\u0e2b\u0e25\u0e14\u0e43\u0e2b\u0e49\u0e2d\u0e31\u0e15\u0e42\u0e19\u0e21\u0e31\u0e15\u0e34 \u0e40\u0e25\u0e37\u0e2d\u0e01\u0e27\u0e34\u0e18\u0e35\u0e43\u0e14\u0e27\u0e34\u0e18\u0e35\u0e2b\u0e19\u0e36\u0e48\u0e07\u0e14\u0e49\u0e32\u0e19\u0e25\u0e48\u0e32\u0e07</p>
+      <div class="form-actions" style="justify-content:flex-start;flex-wrap:wrap">
+        <a class="primary-button" href="${url}" download="${attr(filename)}" target="_blank" rel="noopener"><i class="fa-solid fa-download"></i> \u0e14\u0e32\u0e27\u0e19\u0e4c\u0e42\u0e2b\u0e25\u0e14\u0e44\u0e1f\u0e25\u0e4c</a>
+        <button type="button" class="secondary-button" data-copy><i class="fa-regular fa-copy"></i> \u0e04\u0e31\u0e14\u0e25\u0e2d\u0e01\u0e44\u0e1b\u0e27\u0e32\u0e07\u0e43\u0e19 Google Sheets / Excel</button>
+        <button type="button" class="secondary-button" data-close>${options.back ? '\u0e01\u0e25\u0e31\u0e1a' : '\u0e1b\u0e34\u0e14'}</button></div>
+      <textarea readonly rows="7" style="width:100%;margin-top:10px;font-family:monospace;font-size:.85rem" data-text></textarea>`);
+    const area = body.querySelector('[data-text]');
+    area.value = tsv.length > 60000 ? tsv.slice(0, 60000) + '\n\u2026 (\u0e41\u0e2a\u0e14\u0e07\u0e1a\u0e32\u0e07\u0e2a\u0e48\u0e27\u0e19 \u0e43\u0e0a\u0e49\u0e1b\u0e38\u0e48\u0e21\u0e14\u0e32\u0e27\u0e19\u0e4c\u0e42\u0e2b\u0e25\u0e14\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e23\u0e31\u0e1a\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e04\u0e23\u0e1a)' : tsv;
+    body.querySelector('[data-close]').addEventListener('click', () => { if (options.back) options.back(); else closeModal(); });
+    body.querySelector('[data-copy]').addEventListener('click', async () => {
+      let done = false;
+      try { await navigator.clipboard.writeText(tsv); done = true; } catch (error) { /* \u0e25\u0e2d\u0e07\u0e27\u0e34\u0e18\u0e35\u0e2a\u0e33\u0e23\u0e2d\u0e07 */ }
+      if (!done) { area.focus(); area.select(); try { done = document.execCommand('copy'); } catch (error) { done = false; } }
+      toast(done ? '\u0e04\u0e31\u0e14\u0e25\u0e2d\u0e01\u0e41\u0e25\u0e49\u0e27 \u0e19\u0e33\u0e44\u0e1b\u0e27\u0e32\u0e07\u0e43\u0e19\u0e0a\u0e48\u0e2d\u0e07\u0e41\u0e23\u0e01\u0e02\u0e2d\u0e07\u0e0a\u0e35\u0e15\u0e44\u0e14\u0e49\u0e40\u0e25\u0e22' : '\u0e04\u0e31\u0e14\u0e25\u0e2d\u0e01\u0e44\u0e21\u0e48\u0e44\u0e14\u0e49 \u0e01\u0e23\u0e38\u0e13\u0e32\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e02\u0e49\u0e2d\u0e04\u0e27\u0e32\u0e21\u0e43\u0e19\u0e01\u0e25\u0e48\u0e2d\u0e07\u0e41\u0e25\u0e49\u0e27\u0e01\u0e14 Ctrl+C', done ? 'success' : 'error');
+    });
+    setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
+  }
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = Object.assign(document.createElement('a'), { href: url, download: filename });
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+  // อ่านได้ทั้ง CSV (คั่นด้วย ,) และข้อมูลที่คัดลอกจาก Excel/Google Sheets (คั่นด้วยแท็บ) โดยดูจากแถวแรก
+  function parseCsv(text) {
+    const first = String(text).replace(/^﻿/, '').split(/\r?\n/)[0] || '';
+    const delimiter = first.includes('\t') && !first.includes(',') ? '\t' : ',';
+    const rows = []; let row = []; let cell = ''; let quoted = false;
+    const source = text.replace(/^\ufeff/, '');
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index];
+      if (quoted) {
+        if (char === '"' && source[index + 1] === '"') { cell += '"'; index += 1; }
+        else if (char === '"') quoted = false; else cell += char;
+      } else if (char === '"') quoted = true;
+      else if (char === delimiter) { row.push(cell); cell = ''; }
+      else if (char === '\n' || char === '\r') { if (char === '\r' && source[index + 1] === '\n') index += 1; row.push(cell); rows.push(row); row = []; cell = ''; }
+      else cell += char;
+    }
+    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter((items) => items.some((value) => String(value).trim() !== ''));
+  }
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+  async function openFile(fileId) {
+    const response = await call('file.get', { fileId });
+    if (!response.ok) return;
+    const bytes = Uint8Array.from(atob(response.data.base64), (char) => char.charCodeAt(0));
+    const blob = new Blob([bytes], { type: response.data.mimeType });
+    if (/^(image\/|application\/pdf|text\/)/.test(response.data.mimeType)) window.open(URL.createObjectURL(blob), '_blank');
+    else downloadBlob(blob, response.data.name);
+  }
+  // เก็บข้อมูลที่โหลดแล้วไว้ในหน่วยความจำของหน้า เพื่อเปิดซ้ำได้ทันที
+  function cached(key) { return state.cache[key]; }
+  function remember(key, value) { state.cache[key] = value; return value; }
+  function forget(prefix) { Object.keys(state.cache).forEach((key) => { if (key.startsWith(prefix)) delete state.cache[key]; }); }
+
+  Object.assign(App, { storageKey, runDemoLoad, request, call, register, route, can, setPage, content, renderError, renderForbidden, refreshLookups,
+    lookupList, label, options, yearOptions, personName, setLoading, toast, messageOf, clearErrors, showErrors, openModal,
+    timings, closeModal, esc, attr, fmtDate, fmtDateTime, todayIso, num, groupBy, downloadCsv, downloadBlob, parseCsv, fileToBase64,
+    openFile, cached, remember, forget, moduleLinkAttrs, t, applyTexts, applyStaticTexts, renderPageNote, applyBranding, applyTheme, applyApplicationState, renderNavigation, groupName, ROLE_NAMES });
+})();
+</script>

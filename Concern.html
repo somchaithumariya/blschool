@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="color-scheme" content="light dark">
+  <title>ห้องรับฟัง</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Prompt:wght@500;600&display=swap">
+  <style>
+    :root {
+      --bg: #eaf1ef; --paper: #ffffff; --ink: #14313a; --ink-2: #4a636b; --line: #d1deda; --field: #f6faf9;
+      --teal: #0f766e; --teal-d: #0b5a54; --teal-soft: #dcf0ec; --on-teal: #ffffff;
+      --lamp: #e9a820; --lamp-soft: #fff4d6; --coral: #b92f45; --coral-soft: #fde9ec; --focus: #1a5fd0;
+      --ui: 'IBM Plex Sans Thai', 'Noto Sans Thai', Tahoma, sans-serif; --head: 'Prompt', 'IBM Plex Sans Thai', Tahoma, sans-serif;
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0e1a1d; --paper: #162a2f; --ink: #e5f0ee; --ink-2: #9db8b4; --line: #2b4248; --field: #112226;
+        --teal: #46c9b9; --teal-d: #6fdccf; --teal-soft: #17393a; --on-teal: #062321;
+        --lamp: #f2b93b; --lamp-soft: #382f17; --coral: #ff8b9b; --coral-soft: #3b1d24; --focus: #8ab4ff;
+        color-scheme: dark;
+      }
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; }
+    body { background: var(--bg); color: var(--ink); font: 16px/1.65 var(--ui); -webkit-text-size-adjust: 100%; padding-bottom: 28px; }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    a { color: var(--teal-d); }
+    .wrap { width: min(640px, 100%); margin: 0 auto; padding: 0 16px; }
+
+    /* หัวหน้า */
+    .top { padding: 20px 0 6px; display: flex; align-items: center; gap: 12px; }
+    .glyph { flex: none; width: 46px; height: 46px; border-radius: 15px; background: var(--teal); display: grid; place-items: center; }
+    .glyph svg { width: 26px; height: 26px; }
+    .school { font-size: .86rem; color: var(--ink-2); line-height: 1.3; }
+    .school b { display: block; color: var(--ink); font-weight: 600; font-size: .95rem; }
+    h1 { font: 600 clamp(1.75rem, 6vw, 2.2rem)/1.25 var(--head); margin: 14px 0 6px; text-wrap: balance; }
+    .lead { margin: 0 0 14px; color: var(--ink-2); max-width: 46ch; }
+
+    .help-strip { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--lamp-soft); border: 1px solid color-mix(in srgb, var(--lamp) 55%, transparent);
+      border-radius: 14px; padding: 10px 14px; font-size: .92rem; }
+    .help-strip b { font-weight: 600; }
+    .help-strip a.tel { margin-left: auto; text-decoration: none; background: var(--ink); color: var(--paper); border-radius: 999px; padding: 6px 16px; font-weight: 600; min-height: 36px; display: inline-flex; align-items: center; }
+    details.more { margin: 8px 2px 0; font-size: .9rem; color: var(--ink-2); }
+    details.more summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+    .phones { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 6px; }
+    .phones a { display: flex; justify-content: space-between; gap: 8px; text-decoration: none; background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; color: var(--ink); }
+    .phones a b { color: var(--teal-d); font-variant-numeric: tabular-nums; }
+
+    /* แท็บ */
+    .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; padding: 4px; margin: 18px 0 14px; }
+    .tabs button { min-height: 46px; border: 0; background: transparent; border-radius: 10px; font-weight: 600; cursor: pointer; color: var(--ink-2); }
+    .tabs button[aria-selected="true"] { background: var(--teal); color: var(--on-teal); }
+    .tabs button:focus-visible, .btn:focus-visible, .topic input:focus-visible + span, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+    /* การ์ดแต่ละขั้น */
+    .card { background: var(--paper); border: 1px solid var(--line); border-radius: 18px; padding: 18px 16px; margin-bottom: 14px; }
+    .card h2 { margin: 0 0 4px; font: 600 1.08rem/1.4 var(--head); display: flex; gap: 10px; align-items: baseline; }
+    .card h2 .n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--teal-soft); color: var(--teal-d); font: 600 .85rem/26px var(--ui); text-align: center; }
+    .hint { margin: 0 0 12px 36px; color: var(--ink-2); font-size: .88rem; }
+
+    .topics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .topic { position: relative; display: block; cursor: pointer; }
+    .topic input { position: absolute; opacity: 0; inset: 0; }
+    .topic span { display: block; height: 100%; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 14px; background: var(--field); border-left: 5px solid var(--line); }
+    .topic span b { display: block; font-weight: 600; font-size: .93rem; line-height: 1.35; }
+    .topic span small { display: block; margin-top: 2px; color: var(--ink-2); font-size: .78rem; line-height: 1.4; }
+    .topic.care span { border-left-color: var(--coral); }
+    .topic input:checked + span { border-color: var(--teal); background: var(--teal-soft); border-left-color: var(--teal); box-shadow: inset 0 0 0 1px var(--teal); }
+    .topic.care input:checked + span { border-color: var(--coral); border-left-color: var(--coral); background: var(--coral-soft); box-shadow: inset 0 0 0 1px var(--coral); }
+
+    .seg { display: grid; gap: 8px; }
+    .seg.two { grid-template-columns: 1fr 1fr; }
+    .choice { position: relative; display: block; cursor: pointer; }
+    .choice input { position: absolute; opacity: 0; inset: 0; }
+    .choice span { display: block; padding: 11px 14px; border: 1.5px solid var(--line); border-radius: 14px; background: var(--field); min-height: 48px; }
+    .choice span b { font-weight: 600; display: block; line-height: 1.35; }
+    .choice span small { color: var(--ink-2); font-size: .82rem; display: block; line-height: 1.4; margin-top: 1px; }
+    .choice input:checked + span { border-color: var(--teal); background: var(--teal-soft); box-shadow: inset 0 0 0 1px var(--teal); }
+    .choice input:focus-visible + span { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+    label.field { display: grid; gap: 4px; font-weight: 500; font-size: .92rem; }
+    label.field small { color: var(--ink-2); font-weight: 400; }
+    input[type="text"], input[type="search"], select, textarea { width: 100%; min-height: 48px; padding: 10px 13px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--field); font-size: 1rem; }
+    textarea { min-height: 150px; resize: vertical; line-height: 1.6; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .stack { display: grid; gap: 12px; margin-top: 12px; }
+    .count { text-align: right; color: var(--ink-2); font-size: .8rem; font-variant-numeric: tabular-nums; }
+    .err { margin: 6px 0 0; color: var(--coral); font-size: .86rem; font-weight: 500; }
+    .err:empty { display: none; }
+    .invalid { border-color: var(--coral) !important; }
+    .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; font-size: .94rem; cursor: pointer; }
+    .check input { width: 22px; height: 22px; flex: none; margin: 2px 0 0; accent-color: var(--coral); }
+
+    .care-note { margin-top: 12px; padding: 12px 14px; border-radius: 14px; background: var(--coral-soft); border: 1px solid color-mix(in srgb, var(--coral) 45%, transparent); font-size: .94rem; }
+    .care-note b { color: var(--coral); }
+    .care-note a { color: inherit; font-weight: 600; }
+    .promise { margin: 4px 2px 14px; font-size: .84rem; color: var(--ink-2); }
+    .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+    .btn { min-height: 50px; padding: 10px 20px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--paper); font-weight: 600; cursor: pointer; }
+    .btn.primary { background: var(--teal); border-color: var(--teal); color: var(--on-teal); width: 100%; font-size: 1.05rem; }
+    .btn.primary:hover:not(:disabled) { background: var(--teal-d); border-color: var(--teal-d); }
+    .btn.small { min-height: 42px; padding: 6px 14px; font-size: .9rem; }
+    .btn:disabled { opacity: .6; cursor: progress; }
+    .alert { padding: 12px 14px; border-radius: 12px; background: var(--coral-soft); color: var(--ink); border: 1px solid color-mix(in srgb, var(--coral) 45%, transparent); margin: 0 0 12px; font-size: .94rem; }
+    .closed-card { text-align: center; }
+
+    /* หน้าส่งสำเร็จ */
+    .done h2 { font: 600 1.4rem/1.35 var(--head); margin: 8px 0 4px; }
+    .lamp { width: 56px; height: 56px; border-radius: 50%; background: radial-gradient(circle at 50% 40%, #ffe9a8, var(--lamp)); box-shadow: 0 0 0 8px var(--lamp-soft); }
+    .code { margin: 16px 0 10px; padding: 14px 10px; text-align: center; background: var(--ink); color: var(--paper); border-radius: 16px; font: 600 clamp(1.7rem, 8vw, 2.3rem)/1.2 ui-monospace, 'Cascadia Mono', Consolas, monospace; letter-spacing: .12em; user-select: all; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .actions .btn { flex: 1 1 140px; }
+    .next { margin: 16px 0 0; padding-left: 20px; color: var(--ink-2); font-size: .93rem; }
+
+    /* ติดตามเรื่อง */
+    .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 4px 0 10px; padding: 0; list-style: none; }
+    .steps li { font-size: .74rem; text-align: center; color: var(--ink-2); padding-top: 8px; border-top: 4px solid var(--line); line-height: 1.3; }
+    .steps li.on { border-top-color: var(--teal); color: var(--ink); font-weight: 600; }
+    .status-line { margin: 0 0 12px; font-weight: 600; }
+    .bubble { max-width: 92%; padding: 10px 14px; border-radius: 16px; margin: 0 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .95rem; }
+    .bubble small { display: block; color: var(--ink-2); font-size: .76rem; margin-bottom: 2px; }
+    .bubble.s { margin-left: auto; background: var(--teal-soft); border-bottom-right-radius: 4px; }
+    .bubble.t { background: var(--lamp-soft); border: 1px solid color-mix(in srgb, var(--lamp) 50%, transparent); border-bottom-left-radius: 4px; }
+    .bubble.first { background: var(--field); border: 1px dashed var(--line); }
+    .waiting { color: var(--ink-2); font-size: .92rem; margin: 6px 0 12px; }
+
+    footer { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: .74rem; line-height: 1.5; }
+    @media (max-width: 420px) { .topics { grid-template-columns: 1fr; } .row2 { grid-template-columns: 1fr; } .seg.two { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-motion: no-preference) { .card, .done { animation: rise .28s ease-out both; } @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } } }
+  </style>
+  <?!= include('ScriptsGuard'); ?>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 4v-4h0A2.5 2.5 0 0 1 4 13.5z"/><path d="M9 8.5h6M9 11.5h3.5"/></svg></div>
+    <div class="school"><span id="school-line"></span><b id="school-name"></b></div>
+  </header>
+  <h1>ห้องรับฟัง</h1>
+  <p class="lead" id="lead"></p>
+
+  <div class="help-strip" role="note">
+    <span><b>ต้องการคุยทันที?</b> สายด่วนสุขภาพจิต โทรฟรี ตลอด 24 ชั่วโมง</span>
+    <a class="tel" href="tel:1323" aria-label="โทร 1323">โทร 1323</a>
+  </div>
+  <details class="more"><summary>เบอร์ช่วยเหลืออื่น ๆ</summary><div class="phones" id="phones"></div></details>
+
+  <nav class="tabs" role="tablist" aria-label="เมนู">
+    <button type="button" role="tab" id="tab-send" aria-selected="true" data-tab="send">เล่าให้ครูฟัง</button>
+    <button type="button" role="tab" id="tab-track" aria-selected="false" data-tab="track">ติดตามเรื่อง</button>
+  </nav>
+
+  <main id="app"></main>
+
+  <footer id="credit"></footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const boot = <?!= boot ?>;
+  const $ = (selector, root) => (root || document).querySelector(selector);
+  const esc = (value) => String(value === undefined || value === null ? '' : value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const HINTS = {
+    'เรื่องการเรียน': 'เครียดเรื่องเรียน สอบ ตามเพื่อนไม่ทัน',
+    'เพื่อนและความสัมพันธ์': 'ทะเลาะกัน ไม่มีเพื่อน ถูกเมิน',
+    'ถูกรังแก/ถูกข่มขู่': 'ถูกล้อ ถูกแกล้ง ถูกขู่ ทั้งในโรงเรียนและออนไลน์',
+    'ครอบครัว': 'ปัญหาที่บ้าน พ่อแม่ทะเลาะกัน ต้องดูแลครอบครัว',
+    'ความรู้สึก เครียด เศร้า กังวล': 'เศร้า เหงา กลัว นอนไม่หลับ',
+    'รู้สึกไม่อยากอยู่/คิดทำร้ายตัวเอง': 'คิดว่าไม่อยากมีชีวิต หรือเคยทำร้ายตัวเอง',
+    'ถูกทำร้าย/ถูกล่วงละเมิด/ถูกคุกคาม': 'ถูกตี ถูกจับต้องตัว ถูกบังคับ ถูกขู่',
+    'สุขภาพกาย': 'ป่วย เจ็บ ร่างกายผิดปกติ',
+    'บุหรี่ ยาเสพติด เกม พนัน': 'กังวลเรื่องตัวเองหรือคนใกล้ตัว อยากเลิก',
+    'เรื่องความรัก/เรื่องเพศ': 'ความรัก การป้องกัน ท้องไม่พร้อม',
+    'ความปลอดภัยในโรงเรียนหรือทางออนไลน์': 'จุดอันตราย คนแปลกหน้า ถูกคุกคามออนไลน์',
+    'เงิน ทุนการศึกษา อาหารกลางวัน': 'ไม่มีเงิน ไม่ได้กินข้าว อยากได้ทุน',
+    'เรื่องอื่น ๆ': 'ไม่แน่ใจว่าเป็นเรื่องอะไร เล่ามาได้เลย'
+  };
+  // เตือนทันทีที่พิมพ์เรื่องร้ายแรง (ฝั่งเซิร์ฟเวอร์ตรวจซ้ำและจัดระดับอีกครั้ง)
+  const CRISIS = /ฆ่าตัวตาย|อยากตาย|ไม่อยากอยู่(?!บ้าน|ห้อง|โรงเรียน|ที่นี่)|ไม่อยากมีชีวิต|จบชีวิต|ทำร้ายตัวเอง|กรีดแขน|กรีดข้อมือ|กรีดตัวเอง|กินยาเกินขนาด|โดดตึก|ผูกคอ|ไม่อยากตื่น|ไม่อยากเกิด/;
+
+  let device = '';
+  try { device = localStorage.getItem('rb-device') || ''; if (device.length < 8) { device = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); localStorage.setItem('rb-device', device); } } catch (error) { /* ไม่เป็นไร */ }
+  if (device.length < 8) device = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+
+  const state = { tab: 'send', view: 'form', done: null, tracked: null, trackCode: '', busy: false };
+  let openedAt = Date.now();
+
+  function api(action, data) {
+    return new Promise((resolve) => {
+      google.script.run
+        .withSuccessHandler((response) => resolve(response || { ok: false, error: { message: 'ไม่ได้รับข้อมูลจากเซิร์ฟเวอร์ กรุณาลองใหม่' } }))
+        .withFailureHandler(() => resolve({ ok: false, error: { message: 'ติดต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่' } }))
+        .api({ action, data: Object.assign({ device }, data), tenant: boot.tenant || '' });
+    });
+  }
+
+  // ---------- ส่วนหัว ----------
+  $('#school-line').textContent = 'ห้องรับฟังของ';
+  $('#school-name').textContent = boot.schoolName;
+  $('#lead').textContent = boot.introText || 'บอกเรื่องที่ไม่สบายใจได้ที่นี่ จะไม่บอกชื่อก็ได้ มีเฉพาะครูที่ดูแลนักเรียนเท่านั้นที่ได้อ่าน และครูจะตอบกลับให้ที่หน้านี้';
+  $('#phones').innerHTML = boot.contacts.map((c) => `<a href="tel:${esc(String(c.phone).replace(/[^0-9+]/g, ''))}"><span>${esc(c.name)}</span><b>${esc(c.phone)}</b></a>`).join('');
+  $('#credit').textContent = (boot.credit && boot.credit.text) || '';
+
+  document.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => {
+    state.tab = button.dataset.tab;
+    if (state.tab === 'send' && state.view === 'done') state.view = 'form';
+    paint();
+  }));
+
+  // ---------- วาดหน้า ----------
+  function paint() {
+    document.querySelectorAll('[data-tab]').forEach((button) => button.setAttribute('aria-selected', String(button.dataset.tab === state.tab)));
+    if (state.tab === 'track') return paintTrack();
+    if (state.view === 'done') return paintDone();
+    if (!boot.enabled) {
+      $('#app').innerHTML = `<section class="card closed-card"><h2 style="justify-content:center">ตอนนี้ปิดรับเรื่องชั่วคราว</h2>
+        <p class="hint" style="margin:6px 0 0">ถ้ามีเรื่องไม่สบายใจ บอกครูที่ไว้ใจได้เลย หรือโทร 1323 ได้ตลอด 24 ชั่วโมง ถ้าเคยส่งเรื่องไว้แล้ว กดแท็บ “ติดตามเรื่อง” เพื่อดูคำตอบ</p></section>`;
+      return;
+    }
+    paintForm();
+  }
+
+  function paintForm() {
+    openedAt = Date.now();
+    const anonymousOk = boot.allowAnonymous;
+    $('#app').innerHTML = `<form id="send" novalidate autocomplete="off">
+      <div id="form-alert"></div>
+      <section class="card"><h2><span class="n">1</span> เรื่องอะไรที่อยากเล่า</h2><p class="hint">เลือกหัวข้อที่ใกล้ที่สุด</p>
+        <div class="topics" role="radiogroup" aria-label="หัวข้อ">${boot.topics.map((t) => `<label class="topic ${t.level ? 'care' : ''}">
+          <input type="radio" name="topic" value="${esc(t.name)}"><span><b>${esc(t.name)}</b><small>${esc(HINTS[t.name] || '')}</small></span></label>`).join('')}</div>
+        <p class="err" data-err="topic"></p></section>
+
+      <section class="card"><h2><span class="n">2</span> เรื่องนี้เกี่ยวกับใคร</h2>
+        <div class="seg two" style="margin-top:10px">${boot.aboutOptions.map((name, index) => `<label class="choice"><input type="radio" name="aboutWho" value="${esc(name)}" ${index === 0 ? 'checked' : ''}><span><b>${esc(name)}</b></span></label>`).join('')}</div></section>
+
+      <section class="card"><h2><span class="n">3</span> เล่าให้ครูฟังได้เลย</h2><p class="hint">เล่าเท่าที่สบายใจ เกิดอะไรขึ้น เมื่อไร รู้สึกอย่างไร</p>
+        <textarea name="message" maxlength="${boot.maxMessage}" placeholder="พิมพ์ที่นี่…" aria-label="เรื่องที่อยากเล่า"></textarea>
+        <div class="count"><span id="count">0</span>/${boot.maxMessage}</div>
+        <p class="err" data-err="message"></p>
+        <div class="care-note" id="crisis" hidden><b>ขอบคุณที่บอก เรื่องนี้สำคัญมาก</b> ถ้ารู้สึกว่าอยากทำร้ายตัวเองหรือไม่ปลอดภัยตอนนี้ โทร <a href="tel:1323">1323</a> ได้ทันที (ฟรี ตลอด 24 ชม.) และบอกผู้ใหญ่ที่ไว้ใจที่อยู่ใกล้ที่สุดด้วย ส่งเรื่องนี้ให้ครูต่อได้เลย ครูจะรีบดูแลก่อน</div>
+        <label class="check"><input type="checkbox" name="urgentNow"> <span>ตอนนี้รู้สึกไม่ปลอดภัย หรืออยากให้ครูรีบมาคุยภายในวันนี้</span></label></section>
+
+      <section class="card"><h2><span class="n">4</span> ให้ครูรู้ไหมว่าเป็นใคร</h2>
+        <div class="seg" style="margin-top:10px">
+          ${anonymousOk ? `<label class="choice"><input type="radio" name="mode" value="anonymous" checked><span><b>ไม่บอกชื่อ</b><small>ครูไม่รู้ว่าเป็นใคร ตอบกลับผ่านรหัสติดตามที่หน้านี้</small></span></label>` : ''}
+          <label class="choice"><input type="radio" name="mode" value="named" ${anonymousOk ? '' : 'checked'}><span><b>บอกชื่อ</b><small>ครูจะติดต่อกลับและช่วยดูแลได้ใกล้ชิดกว่า</small></span></label></div>
+        <div class="stack" id="named" ${anonymousOk ? 'hidden' : ''}>
+          <div class="row2"><label class="field">เลขประจำตัวนักเรียน<input type="text" name="studentCode" inputmode="numeric" maxlength="20" autocomplete="off"><span class="err" data-err="studentCode"></span></label>
+            <label class="field">ชื่อ (ไม่ต้องใส่นามสกุล)<input type="text" name="firstName" maxlength="60" autocomplete="off"><span class="err" data-err="firstName"></span></label></div>
+          <div class="row2"><label class="field">ชั้น/ห้อง <small>เช่น ม.2/1 (ไม่บังคับ)</small><input type="text" name="room" maxlength="30"></label>
+            <label class="field">ติดต่อกลับยังไง <small>ช่วงเวลาที่สะดวก (ไม่บังคับ)</small><input type="text" name="contactNote" maxlength="200" placeholder="เช่น พักเที่ยง"></label></div>
+        </div></section>
+
+      <section class="card"><h2><span class="n">5</span> อยากคุยกับใคร</h2>
+        <div style="margin-top:10px"><select name="preferred" aria-label="อยากคุยกับใคร">${boot.preferredOptions.map((name) => `<option>${esc(name)}</option>`).join('')}</select></div></section>
+
+      <p class="promise">เรื่องของเราจะอยู่กับครูที่ดูแลนักเรียนเท่านั้น ยกเว้นเรื่องที่เกี่ยวกับความปลอดภัยของเราหรือของคนอื่น ครูอาจต้องหาคนมาช่วยดูแลต่อ โดยจะบอกเราให้รู้ก่อนเสมอถ้าทำได้</p>
+      <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <button class="btn primary" type="submit" id="send-button">ส่งให้ครู</button>
+    </form>`;
+    const form = $('#send');
+    const message = form.elements.message;
+    message.addEventListener('input', () => {
+      $('#count').textContent = message.value.length;
+      $('#crisis').hidden = !CRISIS.test(message.value.replace(/\s+/g, ''));
+    });
+    form.querySelectorAll('input[name="mode"]').forEach((radio) => radio.addEventListener('change', () => { $('#named').hidden = form.elements.mode.value !== 'named'; }));
+    form.addEventListener('submit', (event) => { event.preventDefault(); submit(form); });
+  }
+
+  function showErrors(root, fields) {
+    root.querySelectorAll('[data-err]').forEach((node) => { node.textContent = fields && fields[node.dataset.err] ? fields[node.dataset.err] : ''; });
+    root.querySelectorAll('.invalid').forEach((node) => node.classList.remove('invalid'));
+    Object.keys(fields || {}).forEach((key) => {
+      const input = root.elements && root.elements[key];
+      if (input && input.classList) input.classList.add('invalid');
+    });
+  }
+
+  async function submit(form) {
+    if (state.busy) return;
+    const named = form.elements.mode.value === 'named';
+    const payload = {
+      topic: (form.querySelector('input[name="topic"]:checked') || {}).value || '', aboutWho: form.elements.aboutWho.value || '',
+      message: form.elements.message.value, urgentNow: form.elements.urgentNow.checked, anonymous: !named,
+      studentCode: form.elements.studentCode.value, firstName: form.elements.firstName.value, room: form.elements.room.value,
+      contactNote: form.elements.contactNote.value, preferred: form.elements.preferred.value, website: form.elements.website.value,
+      elapsed: Date.now() - openedAt
+    };
+    showErrors(form, {});
+    $('#form-alert').innerHTML = '';
+    if (!payload.topic) { showErrors(form, { topic: 'กรุณาเลือกหัวข้อ' }); $('#send .topics').scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
+    state.busy = true;
+    const button = $('#send-button');
+    button.disabled = true;
+    button.textContent = 'กำลังส่ง…';
+    const response = await api('concern.submit', payload);
+    state.busy = false;
+    button.disabled = false;
+    button.textContent = 'ส่งให้ครู';
+    if (!response.ok) {
+      showErrors(form, response.error.fieldErrors);
+      $('#form-alert').innerHTML = `<p class="alert" role="alert">${esc(response.error.message)}</p>`;
+      const first = form.querySelector('.err:not(:empty)') || $('#form-alert');
+      first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return;
+    }
+    state.done = response.data;
+    state.view = 'done';
+    paint();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function paintDone() {
+    const done = state.done;
+    $('#app').innerHTML = `<section class="card done">
+      <div class="lamp" aria-hidden="true"></div>
+      <h2>ส่งให้ครูแล้ว ขอบคุณที่กล้าเล่า</h2>
+      <p style="margin:0;color:var(--ink-2)">จดหรือแคปหน้าจอรหัสนี้ไว้ ใช้กลับมาดูคำตอบจากครูและส่งข้อความต่อได้ <b>รหัสนี้ไม่ผูกกับชื่อ ถ้าทำหายจะเรียกคืนไม่ได้</b></p>
+      <div class="code" id="code" aria-label="รหัสติดตาม">${esc(done.code)}</div>
+      <div class="actions"><button class="btn" type="button" id="copy">คัดลอกรหัส</button><button class="btn primary" type="button" id="open-track" style="width:auto">ดูสถานะเรื่องนี้</button></div>
+      ${done.urgent ? `<div class="care-note" style="margin-top:14px"><b>ครูเห็นว่าเรื่องนี้สำคัญ</b> จะรีบดูแลก่อน ระหว่างรอ ถ้ารู้สึกไม่ปลอดภัย โทร <a href="tel:1323">1323</a> ได้ตลอด 24 ชั่วโมง${done.urgency === 'ฉุกเฉิน' ? ' และบอกครูหรือผู้ใหญ่ที่ไว้ใจที่อยู่ใกล้ที่สุดตอนนี้เลย' : ''}</div>` : ''}
+      <ol class="next"><li>ครูที่ดูแลจะอ่านและรับเรื่อง</li><li>กลับมาที่หน้านี้ กดแท็บ “ติดตามเรื่อง” ใส่รหัส เพื่ออ่านคำตอบ</li><li>อยากเล่าเพิ่มหรือถามต่อ พิมพ์ในหน้าติดตามเรื่องได้</li></ol>
+      <div class="actions" style="margin-top:14px"><button class="btn" type="button" id="again">เล่าอีกเรื่อง</button></div></section>`;
+    $('#copy').addEventListener('click', async (event) => {
+      try { await navigator.clipboard.writeText(done.code); event.target.textContent = 'คัดลอกแล้ว'; } catch (error) {
+        const range = document.createRange(); range.selectNodeContents($('#code')); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        event.target.textContent = 'เลือกรหัสแล้ว กดคัดลอก';
+      }
+    });
+    $('#open-track').addEventListener('click', () => { state.tab = 'track'; state.trackCode = done.code; state.tracked = null; paint(); lookup(done.code); });
+    $('#again').addEventListener('click', () => { state.view = 'form'; paint(); });
+  }
+
+  // ---------- ติดตามเรื่อง ----------
+  function paintTrack() {
+    const t = state.tracked;
+    $('#app').innerHTML = `<section class="card"><h2>ใส่รหัสติดตาม</h2><p class="hint" style="margin-left:0">รหัส 8 ตัว ที่ได้ตอนส่งเรื่อง เช่น K7M2-9QXA</p>
+      <form id="lookup" novalidate><label class="field"><input type="search" name="code" maxlength="9" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX" value="${esc(state.trackCode)}" aria-label="รหัสติดตาม" style="font-family:ui-monospace,Consolas,monospace;letter-spacing:.12em;text-transform:uppercase"></label>
+      <p class="err" id="lookup-error" role="alert"></p>
+      <button class="btn primary" type="submit" style="margin-top:10px" id="lookup-button">ดูเรื่องของเรา</button></form></section>
+      <div id="result">${t ? resultHtml(t) : ''}</div>`;
+    const form = $('#lookup');
+    form.elements.code.addEventListener('input', (event) => {
+      const flat = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+      event.target.value = flat.length > 4 ? flat.slice(0, 4) + '-' + flat.slice(4) : flat;
+    });
+    form.addEventListener('submit', (event) => { event.preventDefault(); lookup(form.elements.code.value); });
+    bindResult();
+  }
+
+  async function lookup(code) {
+    state.trackCode = code;
+    const error = $('#lookup-error');
+    const button = $('#lookup-button');
+    if (error) error.textContent = '';
+    if (button) { button.disabled = true; button.textContent = 'กำลังค้นหา…'; }
+    const response = await api('concern.track', { code });
+    if (button) { button.disabled = false; button.textContent = 'ดูเรื่องของเรา'; }
+    if (!response.ok) { state.tracked = null; if ($('#result')) $('#result').innerHTML = ''; if (error) error.textContent = response.error.message; return; }
+    state.tracked = response.data;
+    $('#result').innerHTML = resultHtml(state.tracked);
+    bindResult();
+  }
+
+  const STEP_NAMES = ['ส่งเรื่องแล้ว', 'ครูรับเรื่อง', 'ครูดูแล', 'ปิดเรื่อง'];
+  function when(iso) {
+    const date = new Date(iso);
+    if (isNaN(date)) return '';
+    return date.toLocaleString('th-TH', { day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function thaiDay(iso) {
+    const date = new Date(String(iso) + 'T00:00:00');
+    return isNaN(date) ? String(iso || '') : date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  function resultHtml(t) {
+    const hasReply = t.thread.some((entry) => entry.by === 't');
+    return `<section class="card">
+      <ol class="steps" aria-label="ความคืบหน้า">${STEP_NAMES.map((name, index) => `<li class="${index <= t.step ? 'on' : ''}">${name}</li>`).join('')}</ol>
+      <p class="status-line">${esc(t.statusText)}</p>
+      <div class="bubble s first"><small>เรื่องที่เราส่ง · ${esc(t.topic)} · ${esc(thaiDay(t.receivedDate))}</small>${esc(t.message)}</div>
+      ${t.thread.map((entry) => `<div class="bubble ${entry.by === 't' ? 't' : 's'}"><small>${esc(entry.by === 't' ? entry.name : 'เรา')} · ${esc(when(entry.at))}</small>${esc(entry.text)}</div>`).join('')}
+      ${hasReply ? '' : '<p class="waiting">ครูยังไม่ได้ตอบกลับ กลับมาดูใหม่ภายหลังได้ ถ้าเรื่องด่วนมาก บอกครูที่ไว้ใจหรือโทร 1323</p>'}
+    </section>
+    <form class="card" id="follow" novalidate><h2>ส่งข้อความถึงครูเพิ่ม</h2>
+      <textarea name="message" maxlength="${boot.maxFollow}" style="min-height:110px;margin-top:10px" aria-label="ข้อความถึงครู" placeholder="พิมพ์ข้อความ…"></textarea>
+      <p class="err" data-err="message"></p>
+      <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <button class="btn primary" type="submit" style="margin-top:10px">ส่งข้อความ</button>
+      <button class="btn small" type="button" id="refresh" style="margin-top:8px;width:100%">รีเฟรชดูคำตอบใหม่</button></form>`;
+  }
+
+  function bindResult() {
+    const follow = $('#follow');
+    if (!follow) return;
+    follow.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      showErrors(follow, {});
+      const button = follow.querySelector('button[type="submit"]');
+      button.disabled = true;
+      const response = await api('concern.followUp', { code: state.trackCode, message: follow.elements.message.value, website: follow.elements.website.value });
+      button.disabled = false;
+      if (!response.ok) {
+        const text = (response.error.fieldErrors && response.error.fieldErrors.message) || response.error.message;
+        follow.querySelector('[data-err="message"]').textContent = text;
+        return;
+      }
+      state.tracked = response.data;
+      $('#result').innerHTML = resultHtml(state.tracked);
+      bindResult();
+    });
+    $('#refresh').addEventListener('click', () => lookup(state.trackCode));
+  }
+
+  paint();
+})();
+</script>
+</body>
+</html>

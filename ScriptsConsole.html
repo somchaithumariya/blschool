@@ -1,0 +1,532 @@
+<script>
+/**
+ * ศูนย์ผู้ดูแลระบบ (#/admin): สถานะระบบ ตรวจความถูกต้องของข้อมูล ทางลัดไปทุกงานของผู้ดูแล และแอปมือถือ
+ * โหมดแก้ไขข้อความ: ผู้มีสิทธิ์ texts.edit คลิกข้อความบนหน้าจอ (ชื่อเมนู หมวด หัวตาราง ชื่อช่อง คำอธิบายหน้า) แล้วแก้และบันทึกได้ทันที
+ */
+(function () {
+  'use strict';
+  const App = window.App;
+  const { esc, attr } = App;
+  const n = (value) => Number(value || 0).toLocaleString('th-TH');
+
+  // ---------- ทางลัดงานของผู้ดูแล แบ่ง 2 ส่วน ----------
+  const SECTIONS = [
+    { key: 'system', title: 'ส่วนที่ 1 · ระบบ ผู้ใช้ และความปลอดภัย', icon: 'fa-shield-halved', tone: 'rose',
+      note: 'งานเทคนิคที่มีผลกับทั้งระบบ ควรมีผู้ดูแลเพียง 1–2 คน',
+      items: [
+        ['users', 'สร้างบัญชี อนุมัติผู้สมัคร ตั้งรหัสผ่านใหม่'], ['roles', 'กำหนดว่าแต่ละบทบาทเห็นและแก้ไขเมนูใดได้'],
+        ['menu-manager', 'เปิด/ปิดเมนูที่โรงเรียนไม่ใช้'], ['branding', 'ชื่อระบบ สีธีม การสมัครสมาชิก การแจ้งเตือน LINE/Telegram'],
+        ['ai-settings', 'API key แยกตามเรื่อง และผู้ที่ใช้ AI ได้'], ['integrations', 'เพิ่มลิงก์ระบบอื่นเป็นเมนู'],
+        ['year-close', 'เก็บถาวร ย้ายข้อมูลเก่าออก และเลื่อนชั้น'], ['audit-logs', 'ใครทำอะไร เมื่อไหร่'],
+        ['distribution', 'คำขอใช้ระบบจากโรงเรียนอื่น หนังสือที่ลงนาม และบัญชีของแต่ละโรงเรียน']
+      ] },
+    { key: 'content', title: 'ส่วนที่ 2 · ข้อมูลและเนื้อหาของโรงเรียน', icon: 'fa-school', tone: 'blue',
+      note: 'มอบหมายให้งานทะเบียน/ธุรการช่วยดูแลได้ โดยให้สิทธิ์ที่หน้า “บทบาทและสิทธิ์”',
+      items: [
+        ['school-profile', 'ข้อมูลโรงเรียน ตรา ผู้บริหาร ภาพบรรยากาศ'], ['landing-editor', 'จัดหน้าแรกแบบเห็นผลทันที'],
+        ['academic-years', 'ปีการศึกษาและภาคเรียนปัจจุบัน'], ['periods', 'คาบเรียนและเวลา'], ['homerooms', 'ห้องเรียนและครูที่ปรึกษา'],
+        ['calendar', 'วันหยุดและกิจกรรม'], ['announcements', 'ประกาศถึงครูและบนหน้าแรก'], ['master-subject-groups', 'กลุ่มสาระ ฝ่าย ตำแหน่ง คำนำหน้า']
+      ] }
+  ];
+  const LEVEL = { error: ['fa-circle-xmark', 'danger', 'ต้องแก้ไข'], warn: ['fa-triangle-exclamation', 'warning', 'ควรตรวจสอบ'], info: ['fa-circle-info', 'info', 'แนะนำ'] };
+
+  App.register('#/admin', async () => {
+    const moduleOf = (key) => App.state.modules.find((module) => module.key === key);
+    App.content(`<section class="admin-hero panel">
+        <div><h2><i class="fa-solid fa-screwdriver-wrench"></i> ศูนย์ผู้ดูแลระบบ</h2>
+          <p>ดูสถานะระบบ ตรวจความถูกต้องของข้อมูล และไปยังงานของผู้ดูแลได้จากหน้าเดียว</p></div>
+        <div class="actions">
+          ${App.can('texts.edit') ? '<button type="button" class="secondary-button" data-texts><i class="fa-solid fa-font"></i> ข้อความในระบบ</button>' : ''}
+          <button type="button" class="secondary-button" data-warm><i class="fa-solid fa-fire-flame-curved"></i> อุ่นระบบตอนนี้</button>
+          ${App.can('settings.edit') ? '<button type="button" class="secondary-button" data-clear><i class="fa-solid fa-broom"></i> ล้างแคช</button>' : ''}
+          <button type="button" class="icon-button" data-refresh title="ตรวจสอบใหม่" aria-label="ตรวจสอบใหม่"><i class="fa-solid fa-rotate"></i></button></div>
+      </section>
+      <div class="stat-grid admin-stats" data-stats>${[1, 2, 3, 4].map(() => '<div class="stat-card skeleton"></div>').join('')}</div>
+      <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-stethoscope c-green"></i> ตรวจความถูกต้องของข้อมูล</h2>
+        <p>ระบบตรวจหาข้อมูลที่ขาด ซ้ำ หรือไม่สอดคล้องกัน กด “ไปแก้ไข” เพื่อเปิดหน้าที่เกี่ยวข้อง</p></div></div>
+        <div data-checks><p class="muted"><span class="loading-dots">กำลังตรวจสอบ</span></p></div></section>
+      <div class="admin-sections">${SECTIONS.map((section) => `<section class="panel admin-section tone-${section.tone}">
+        <div class="panel-head"><div><h2><i class="fa-solid ${section.icon}"></i> ${esc(section.title)}</h2><p>${esc(section.note)}</p></div></div>
+        <div class="admin-links">${section.items.map(([key, hint]) => {
+          const module = moduleOf(key);
+          if (!module) return '';
+          return `<a class="admin-link" href="${attr(module.route)}"><i class="fa-solid ${attr(module.icon)} c-${attr(module.color)}"></i>
+            <span><strong>${esc(module.name)}</strong><small>${esc(hint)}</small></span><i class="fa-solid fa-chevron-right go"></i></a>`;
+        }).join('')}</div></section>`).join('')}</div>
+      <div class="admin-sections">
+        <section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-gauge-high c-sky"></i> ความเร็วและฐานข้อมูล</h2>
+          <p>ตารางที่ใหญ่ที่สุด แคช และแท็บสรุปผลสำเร็จรูป (Summaries)</p></div></div><div data-storage><p class="muted"><span class="loading-dots">กำลังโหลด</span></p></div></section>
+        <section class="panel" data-mobile-card><div class="panel-head"><div><h2><i class="fa-solid fa-mobile-screen c-violet"></i> แอปมือถือสำหรับครู</h2>
+          <p>เปิดระบบแบบแอป (ไม่มีหน้าประชาสัมพันธ์) เพิ่มไอคอนไว้บนหน้าจอโทรศัพท์ได้</p></div></div><div data-mobile></div></section>
+        ${App.can('aiSettings.view') ? `<section class="panel"><div class="panel-head"><div><h2><i class="fa-solid fa-comment-dots c-violet"></i> น้องบอท (แชทบอทประจำหน้า)</h2>
+          <p>บอทแยกตามงานให้ผู้ใช้เลือก ตอบคำถามจากข้อมูลของหน้าที่เปิดอยู่ ทุกตัวใช้ API key เดียวกันที่ใส่ตรงนี้</p></div></div>
+          <div data-bot-card><p class="muted"><span class="loading-dots">กำลังโหลด</span></p></div></section>` : ''}
+      </div>`);
+    const root = document.getElementById('page-content');
+    root.querySelector('[data-refresh]').addEventListener('click', () => loadHub(true));
+    root.querySelector('[data-warm]').addEventListener('click', async (event) => {
+      event.currentTarget.disabled = true;
+      const result = await App.call('system.warm');
+      event.currentTarget.disabled = false;
+      if (result.ok) { App.toast(`อุ่นระบบแล้ว: โหลดตารางเข้าแคช ${result.data.loaded} ตาราง (${(result.data.ms / 1000).toFixed(1)} วินาที)`, 'success'); loadHub(false); }
+    });
+    const clear = root.querySelector('[data-clear]');
+    if (clear) clear.addEventListener('click', async () => {
+      if (!confirm('ล้างแคชทั้งหมดแล้วโหลดใหม่จาก Google Sheet? (ใช้หลังแก้ข้อมูลในชีตด้วยมือ)')) return;
+      const result = await App.call('admin.clearCache');
+      if (result.ok) { App.state.cache = {}; App.toast('ล้างแคชและอุ่นระบบใหม่แล้ว', 'success'); loadHub(true); }
+    });
+    const texts = root.querySelector('[data-texts]');
+    if (texts) texts.addEventListener('click', openTextList);
+    renderMobileCard(root.querySelector('[data-mobile]'));
+    loadBotCard(root.querySelector('[data-bot-card]'));
+    loadHub(false);
+  });
+
+  // การ์ดตั้งค่าน้องบอท: เปิด/ปิด เลือกผู้ให้บริการ และใส่ API key ได้จากศูนย์ผู้ดูแลระบบ (ค่าอื่นตั้งที่หน้า "ตั้งค่า AI")
+  async function loadBotCard(box) {
+    if (!box) return;
+    const response = await App.call('ai.settings', null, { silent: true, quiet: true });
+    if (!box.isConnected) return;
+    if (!response.ok) { box.innerHTML = `<p class="form-error">${esc(App.messageOf(response.error))}</p>`; return; }
+    paintBotCard(box, response.data);
+  }
+
+  // ความรู้เฉพาะของโรงเรียนที่ผู้ดูแลเขียนให้บอท
+  async function loadBotTeach(form, canEdit) {
+    if (!form) return;
+    const area = form.elements.text;
+    const count = form.querySelector('[data-bot-count]');
+    const showCount = () => { count.textContent = `${n(area.value.length)} / 4,000 ตัวอักษร`; };
+    const response = await App.call('bot.knowledge', null, { silent: true, quiet: true });
+    if (!form.isConnected) return;
+    if (response.ok) area.value = response.data.text || '';
+    showCount();
+    area.addEventListener('input', showCount);
+    if (!canEdit) return;
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const result = await App.call('bot.saveKnowledge', { text: area.value });
+      if (!result.ok) return;
+      area.value = result.data.text;
+      showCount();
+      App.toast(result.data.text ? 'บันทึกแล้ว บอทจะใช้ข้อมูลนี้ตั้งแต่คำถามถัดไป' : 'ลบสิ่งที่สอนไว้แล้ว', 'success');
+    });
+  }
+
+  function paintBotCard(box, data) {
+    const feature = data.features.find((item) => item.key === 'bot');
+    if (!feature) { box.innerHTML = '<p class="muted">ระบบรุ่นนี้ยังไม่มีน้องบอท</p>'; return; }
+    const canEdit = App.can('aiSettings.edit');
+    const tone = (value) => (/^#[0-9a-f]{6}$/i.test(String(value)) ? value : '#1e3a5f');
+    const icon = (value) => (/^fa-[a-z0-9-]+$/.test(String(value)) ? value : 'fa-comment-dots');
+    const state = feature.enabled && feature.keyHint ? ['success', 'พร้อมใช้งาน'] : feature.enabled ? ['warning', 'ยังไม่มี key'] : ['info', 'ปิดอยู่'];
+    box.innerHTML = `<div class="bot-lineup">${(App.state.bots || []).map((bot) =>
+        `<span style="--tone:${tone(bot.color)}" title="${attr(bot.role)}">${App.botFace ? `<i class="bot-lineup-face">${App.botFace(bot.key)}</i>` : `<i class="fa-solid ${icon(bot.icon)}"></i>`}${esc(bot.name)}</span>`).join('')}</div>
+      <form class="form-grid" data-bot-settings>
+        <label class="check-row wide"><input type="checkbox" name="enabled" ${feature.enabled ? 'checked' : ''} ${canEdit ? '' : 'disabled'}> เปิดใช้งานน้องบอท
+          <span class="badge ${state[0]}">${state[1]}</span></label>
+        <label>ผู้ให้บริการ AI<select name="provider" ${canEdit ? '' : 'disabled'}>${data.providers.map((item) =>
+          `<option value="${attr(item.key)}" ${item.key === feature.provider ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>
+        <label>API key ของบอท ${feature.keyHint ? `(ปัจจุบัน ${esc(feature.keyHint)})` : '(ยังไม่มี)'}<input name="apiKey" type="password" autocomplete="off"
+          placeholder="${feature.keyHint ? 'เว้นว่าง = ใช้ key เดิม' : 'วาง API key'}" ${canEdit ? '' : 'disabled'}></label>
+        ${canEdit ? `<div class="wide actions"><button type="submit" class="primary-button"><i class="fa-solid fa-floppy-disk"></i> บันทึก</button>
+          <button type="button" class="secondary-button" data-bot-test ${feature.keyHint ? '' : 'disabled'}><i class="fa-solid fa-plug-circle-check"></i> ทดสอบการเชื่อมต่อ</button>
+          <a class="secondary-button" href="#/ai-settings"><i class="fa-solid fa-sliders"></i> รุ่น โควตา และบทบาทที่ใช้ได้</a></div>` : ''}
+      </form>
+      <p class="muted small-line">key เก็บในเซิร์ฟเวอร์ของโรงเรียนนี้เท่านั้น แสดงเพียง 4 ตัวท้าย และไม่ถูกคัดลอกไปกับระบบของโรงเรียนอื่น</p>
+      <form class="bot-teach" data-bot-teach>
+        <h3 class="subhead">สอนบอทเรื่องของโรงเรียนเรา</h3>
+        <p class="muted small-line">บอทรู้วิธีใช้ระบบและหลักการทำงานของแต่ละงานอยู่แล้ว เขียนสิ่งที่เป็นเรื่องเฉพาะของโรงเรียนไว้ตรงนี้ บอททุกตัวจะใช้ประกอบคำตอบ เช่น ขนาดโรงเรียน นโยบายของ ผอ. เกณฑ์ที่โรงเรียนใช้ ผู้รับผิดชอบงานแต่ละฝ่าย หรือคำที่อยากให้บอทใช้</p>
+        <textarea name="text" rows="7" maxlength="4000" ${canEdit ? '' : 'disabled'} placeholder="ตัวอย่าง:&#10;- โรงเรียนขนาดเล็ก เปิดสอน อ.2 ถึง ป.6 ครู 9 คน&#10;- นักเรียนขาดเรียนเกิน 3 วันติดกัน ครูที่ปรึกษาต้องเยี่ยมบ้าน&#10;- งานดูแลช่วยเหลือนักเรียนมีครู ก. เป็นหัวหน้างาน&#10;- เรียกผู้อำนวยการว่า ผอ."></textarea>
+        <div class="actions"><span class="muted small-line" data-bot-count></span>
+          ${canEdit ? '<button type="submit" class="primary-button"><i class="fa-solid fa-graduation-cap"></i> บันทึกสิ่งที่สอน</button>' : ''}</div>
+        <p class="muted small-line">อย่าใส่ข้อมูลส่วนตัวของนักเรียนหรือรหัสผ่าน ข้อความนี้ถูกส่งให้ผู้ให้บริการ AI ทุกครั้งที่มีคนถาม</p>
+      </form>`;
+    loadBotTeach(box.querySelector('[data-bot-teach]'), canEdit);
+    if (!canEdit) return;
+    const form = box.querySelector('[data-bot-settings]');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const provider = form.elements.provider.value;
+      const result = await App.call('ai.saveSettings', { features: [{ key: 'bot', enabled: form.elements.enabled.checked, provider,
+        model: provider === feature.provider ? feature.model : '', apiKey: form.elements.apiKey.value.trim(), hourlyLimit: feature.hourlyLimit, roles: feature.roles }] });
+      if (!result.ok) return;
+      App.forget('ai:status');
+      App.state.ai = null;
+      if (App.syncBot) App.syncBot();
+      App.toast('บันทึกการตั้งค่าน้องบอทแล้ว', 'success');
+      paintBotCard(box, result.data);
+    });
+    box.querySelector('[data-bot-test]').addEventListener('click', () => {
+      if (form.elements.apiKey.value.trim()) return App.toast('กรุณากด “บันทึก” ก่อนทดสอบ', 'error');
+      App.showAi('ทดสอบน้องบอท', 'ai.test', { feature: 'bot' }, (info) => `${info.reply}\n\n(ผู้ให้บริการ: ${info.provider} · รุ่น: ${info.model})`);
+    });
+  }
+
+  async function loadHub(refresh) {
+    const root = document.getElementById('page-content');
+    const [health, checks] = await Promise.all([App.call('admin.health', { refresh }, { silent: true }), App.call('admin.checks', null, { silent: true })]);
+    if (!root.querySelector('[data-stats]')) return;
+    if (health.ok) renderHealth(root, health.data);
+    if (checks.ok) renderChecks(root.querySelector('[data-checks]'), checks.data.items);
+  }
+
+  function renderHealth(root, h) {
+    const warm = h.warm ? `${App.fmtDateTime(h.warm.at)} (${h.warm.source === 'trigger' ? 'ทริกเกอร์' : h.warm.source === 'admin' ? 'ผู้ดูแล' : 'หน้าเว็บ'})` : 'ยังไม่เคย';
+    const tone = h.storage.percent >= 90 ? 'danger' : h.storage.percent >= 70 ? 'warning' : 'success';
+    root.querySelector('[data-stats]').innerHTML = `
+      <div class="stat-card blue"><small>ฐานข้อมูล</small><strong>${h.storage.percent}%</strong><span class="stat-icon"><i class="fa-solid fa-database"></i></span>
+        <div class="meter ${tone}"><span style="width:${Math.min(100, h.storage.percent)}%"></span></div>
+        <p>${n(h.storage.cells)} จาก 10 ล้านเซลล์</p></div>
+      <div class="stat-card green"><small>แคช (ความเร็ว)</small><strong>${h.cache.cached}/${h.cache.total}</strong><span class="stat-icon"><i class="fa-solid fa-bolt"></i></span>
+        <p>ตารางพร้อมใช้ในหน่วยความจำ</p><p class="small-line">อุ่นล่าสุด: ${esc(warm)}</p></div>
+      <div class="stat-card amber"><small>ผู้ใช้งาน</small><strong>${n(h.users.total)}</strong><span class="stat-icon"><i class="fa-solid fa-users"></i></span>
+        <p>${h.users.pending ? `<span class="badge warning">รออนุมัติ ${n(h.users.pending)}</span>` : 'ไม่มีผู้รออนุมัติ'}</p>
+        <p class="small-line">ยังไม่เคยเข้าใช้ ${n(h.users.mustChange)} · ปิดใช้งาน ${n(h.users.inactive)}</p></div>
+      <div class="stat-card purple"><small>AI พร้อมใช้</small><strong>${h.ai.ready}/${h.ai.total}</strong><span class="stat-icon"><i class="fa-solid fa-robot"></i></span>
+        <p>เรื่องที่ตั้ง API key แล้ว</p><p class="small-line">โครงสร้างข้อมูลรุ่น ${esc(h.schemaVersion)} · บันทึกแล้ว ${n(h.writes)} ครั้ง</p></div>`;
+    const top = h.storage.sheets.slice(0, 8);
+    const max = Math.max(1, ...top.map((sheet) => sheet.rows));
+    root.querySelector('[data-storage]').innerHTML = `
+      <div class="bar-list">${top.map((sheet) => `<div class="bar-row"><span class="bar-label">${esc(sheet.name)}</span>
+        <span class="bar-track"><span class="bar-fill" style="width:${Math.max(2, Math.round(sheet.rows * 100 / max))}%;background:#60a5fa"></span></span><strong class="bar-value">${n(sheet.rows)}</strong></div>`).join('')}</div>
+      <p class="muted">แถวข้อมูลของตารางที่ใหญ่ที่สุด ${h.lastClosure ? `· ปิดปีการศึกษาล่าสุด ${esc(h.lastClosure.year)}` : '· ยังไม่เคยปิดปีการศึกษา'}</p>
+      <h3 class="subhead">แท็บสรุปผลสำเร็จรูป</h3>
+      ${h.summaries.length ? `<div class="chip-list">${h.summaries.map((item) => `<span class="chip" title="${attr(App.fmtDateTime(item.updatedAt))}"><i class="fa-solid fa-table-cells"></i> ${esc(summaryName(item.key))}</span>`).join('')}</div>`
+        : '<p class="muted">ยังไม่มี ระบบจะสร้างเองเมื่อมีผู้เปิดแดชบอร์ด หน้าแรก หรือรายงาน</p>'}
+      <p class="muted small-line">ผลสรุปเก็บในแท็บ Summaries ของ Google Sheet เมื่อข้อมูลต้นทางเปลี่ยน ระบบจะคำนวณใหม่เอง แม้แคชถูกล้างก็ไม่ต้องคำนวณจากหลายตารางใหม่ทั้งหมด</p>
+      ${bulkLine(h.bulk)}
+      ${timingTable()}
+      ${h.cache.missing.length ? `<details class="small-line"><summary>ตารางที่ยังไม่อยู่ในแคช (${h.cache.missing.length})</summary><p class="muted">${esc(h.cache.missing.join(', '))}</p></details>` : ''}
+      <details class="tip"><summary><i class="fa-solid fa-clock"></i> ตั้งให้ระบบอุ่นตัวเองทุกชั่วโมง (แนะนำ)</summary>
+        <ol><li>เปิดโปรเจกต์ Apps Script ของระบบ แล้วกดเมนู “ทริกเกอร์” (รูปนาฬิกา)</li>
+          <li>กด “เพิ่มทริกเกอร์” เลือกฟังก์ชัน <code>warmSystem</code> ประเภท “ตามเวลา” ทุก 1 ชั่วโมง แล้วบันทึก</li>
+          <li>กลับมาหน้านี้ ช่อง “อุ่นล่าสุด” จะขึ้นว่า “ทริกเกอร์” แปลว่าทำงานแล้ว</li></ol></details>
+      <div class="form-actions" style="justify-content:flex-start"><button type="button" class="secondary-button" data-compact><i class="fa-solid fa-compress"></i> ลดพื้นที่ว่างในฐานข้อมูล</button>
+        <small class="muted">ลบแถว/คอลัมน์ว่างที่ Google จองไว้ในแต่ละแท็บ ไม่แตะข้อมูล ทำได้ทุกเมื่อ</small></div>
+      ${h.storage.url ? `<a class="secondary-button" href="${attr(h.storage.url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-table"></i> เปิด Google Sheet ฐานข้อมูล</a>` : ''}`;
+    const compactButton = root.querySelector('[data-compact]');
+    if (compactButton) compactButton.addEventListener('click', async () => {
+      if (!confirm('ลดพื้นที่ว่างในฐานข้อมูล? (ไม่แตะข้อมูล ใช้เวลาประมาณ 10–30 วินาที)')) return;
+      compactButton.disabled = true;
+      const result = await App.call('admin.compact');
+      compactButton.disabled = false;
+      if (!result.ok) return;
+      App.toast('คืนพื้นที่ ' + n(result.data.freed) + ' เซลล์ จาก ' + result.data.sheets + ' ตาราง · ใช้ไป ' + result.data.storage.percent + '%', 'success');
+      App.route();
+    });
+    const check = root.querySelector('[data-bulk-check]');
+    if (check) check.addEventListener('click', async () => {
+      check.disabled = true;
+      App.toast('กำลังเทียบข้อมูลทุกตาราง อาจใช้เวลาประมาณครึ่งนาที', 'info');
+      const result = await App.call('admin.bulkCheck');
+      check.disabled = false;
+      if (!result.ok) return;
+      if (result.data.error) App.toast('ตรวจไม่สำเร็จ: ' + result.data.error, 'error');
+      else if (result.data.mismatched.length) App.toast(`พบ ${result.data.mismatched.length} ตารางที่ค่าไม่ตรง ระบบจะอ่านตารางเหล่านี้แบบปกติ: ${result.data.mismatched.join(', ')}`, 'warning');
+      else App.toast(`ถูกต้อง: อ่านได้ตรงกันทั้ง ${result.data.checked} ตาราง`, 'success');
+      loadHub(false);
+    });
+  }
+
+  // การอ่านหลายตารางในครั้งเดียว (Sheets API): สถานะ + ปุ่มตรวจว่าอ่านได้ค่าตรงกับการอ่านปกติ
+  function bulkLine(bulk) {
+    if (!bulk) return '';
+    const state = !bulk.supported ? ['warning', 'ยังไม่เปิดใช้ (ระบบอ่านทีละตาราง)']
+      : bulk.error ? ['warning', 'เรียกไม่สำเร็จ ระบบอ่านทีละตารางแทน'] : ['success', 'ใช้งานอยู่'];
+    const checked = bulk.checked ? `ตรวจล่าสุด ${App.fmtDateTime(bulk.checked.at)}: ตรงกัน ${n(bulk.checked.checked - bulk.checked.mismatched)} จาก ${n(bulk.checked.checked)} ตาราง` : 'ยังไม่เคยตรวจ';
+    return `<h3 class="subhead">การอ่านข้อมูลแบบเร็ว</h3>
+      <p class="small-line"><span class="badge ${state[0]}">${state[1]}</span> อ่านทุกตารางที่ไม่อยู่ในแคชด้วยการเรียกครั้งเดียว ${esc(checked)}</p>
+      ${bulk.error ? `<p class="muted small-line">${esc(bulk.error)}</p>` : ''}
+      ${bulk.skipped && bulk.skipped.length ? `<p class="muted small-line">ตารางที่อ่านแบบปกติ (ค่าไม่ตรง): ${esc(bulk.skipped.join(', '))}</p>` : ''}
+      ${bulk.supported && App.can('settings.edit') ? '<button type="button" class="secondary-button" data-bulk-check><i class="fa-solid fa-scale-balanced"></i> ตรวจความถูกต้องของการอ่านแบบเร็ว</button>' : ''}`;
+  }
+
+  function timingTable() {
+    const rows = (App.timings || []).slice(0, 12);
+    if (!rows.length) return '';
+    const sec = (ms) => (ms === undefined || ms === null ? '-' : (ms / 1000).toFixed(1));
+    return `<details class="small-line"><summary>เวลาของคำขอล่าสุดในเครื่องนี้ (วินาที)</summary>
+      <table class="mini-table"><thead><tr><th>คำสั่ง</th><th>เซิร์ฟเวอร์</th><th>รวมที่รอ</th></tr></thead><tbody>${rows.map((row) =>
+        `<tr><td>${esc(row.action)}</td><td>${sec(row.server)}</td><td>${sec(row.total)}</td></tr>`).join('')}</tbody></table>
+      <p class="muted">“เซิร์ฟเวอร์” คือเวลาที่ระบบใช้อ่านและประมวลผลข้อมูล ส่วนที่เหลือคือเวลาเดินทางของข้อมูลและการเริ่มทำงานของ Google</p></details>`;
+  }
+
+  function summaryName(key) {
+    const names = { lookups: 'รายการอ้างอิง (ชื่อครู/นักเรียน/ห้อง)', landing: 'หน้าแรก', dashboard: 'แดชบอร์ด' };
+    if (names[key]) return names[key];
+    if (/^safety:/.test(key)) return 'ภาพรวมความปลอดภัย';
+    if (/^attRisk:/.test(key)) return 'เวลาเรียนไม่ถึงเกณฑ์ ' + key.split(':').pop() + '%';
+    return key;
+  }
+
+  function renderChecks(box, items) {
+    if (!box) return;
+    if (!items.length) { box.innerHTML = '<div class="check-ok"><i class="fa-solid fa-circle-check c-green"></i> ไม่พบปัญหา ข้อมูลพร้อมใช้งาน</div>'; return; }
+    const counts = items.reduce((result, item) => { result[item.level] = (result[item.level] || 0) + 1; return result; }, {});
+    box.innerHTML = `<p class="check-summary">${['error', 'warn', 'info'].filter((level) => counts[level]).map((level) =>
+        `<span class="badge ${LEVEL[level][1]}"><i class="fa-solid ${LEVEL[level][0]}"></i> ${LEVEL[level][2]} ${counts[level]}</span>`).join(' ')}</p>
+      <ul class="check-list">${items.map((item) => `<li class="lv-${item.level}"><i class="fa-solid ${LEVEL[item.level][0]}"></i>
+        <div><strong>${esc(item.title)}${item.count !== null ? ` <span class="count">${n(item.count)}</span>` : ''}</strong>${item.detail ? `<small>${esc(item.detail)}</small>` : ''}</div>
+        ${item.route ? `<a class="secondary-button" href="${attr(item.route)}">ไปแก้ไข</a>` : ''}</li>`).join('')}</ul>`;
+  }
+
+  // ---------- แอปมือถือ ----------
+  function appUrl() {
+    const saved = String(App.state.settings.systemUrl || '').trim();
+    const referrer = String(document.referrer || '');
+    const base = saved || (/^https:\/\/script\.google\.com\/(a\/[^/]+\/)?macros\/s\/[^/]+\/exec/.test(referrer) ? referrer.split('?')[0].split('#')[0] : '');
+    return base ? base.replace(/\/exec.*$/, '/exec') + '?app=1' : '';
+  }
+  App.appUrl = appUrl;
+
+  function renderMobileCard(box) {
+    if (!box) return;
+    const url = appUrl();
+    box.innerHTML = `${url ? `<div class="app-link-box"><div data-qr class="qr"></div><div>
+        <p><strong>ลิงก์แอป</strong></p><input readonly value="${attr(url)}" data-app-url>
+        <div class="actions"><button type="button" class="secondary-button" data-copy><i class="fa-regular fa-copy"></i> คัดลอกลิงก์</button>
+          <a class="secondary-button" href="${attr(url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-up-right-from-square"></i> ลองเปิด</a></div></div></div>`
+      : '<p class="muted">ยังไม่ทราบลิงก์ของระบบ กรอกลิงก์เว็บแอป (ที่ลงท้ายด้วย /exec) ด้านล่างครั้งเดียว</p>'}
+      ${App.can('settings.edit') ? `<label class="system-url">ลิงก์ของระบบ (URL เว็บแอป)<span class="inline-form"><input data-system-url placeholder="https://script.google.com/macros/s/.../exec" value="${attr(App.state.settings.systemUrl || '')}">
+        <button type="button" class="secondary-button" data-save-url>บันทึก</button></span></label>` : ''}
+      <details class="tip" open><summary><i class="fa-solid fa-circle-question"></i> วิธีเพิ่มแอปไว้บนหน้าจอโทรศัพท์</summary>
+        <ol><li>สแกน QR หรือเปิดลิงก์แอปด้วย Chrome (Android) หรือ Safari (iPhone)</li>
+          <li>Android: กดเมนู ⋮ แล้วเลือก “เพิ่มลงในหน้าจอหลัก” · iPhone: กดปุ่มแชร์ แล้วเลือก “เพิ่มไปยังหน้าจอโฮม”</li>
+          <li>เข้าสู่ระบบแล้วติ๊ก “จดจำการเข้าสู่ระบบ” ครั้งต่อไปกดไอคอนก็ใช้งานได้ทันที (14 วัน)</li></ol></details>`;
+    const copy = box.querySelector('[data-copy]');
+    if (copy) copy.addEventListener('click', async () => {
+      const input = box.querySelector('[data-app-url]');
+      try { await navigator.clipboard.writeText(input.value); App.toast('คัดลอกลิงก์แล้ว', 'success'); } catch (error) { input.select(); document.execCommand('copy'); App.toast('คัดลอกลิงก์แล้ว', 'success'); }
+    });
+    const save = box.querySelector('[data-save-url]');
+    if (save) save.addEventListener('click', async () => {
+      const value = box.querySelector('[data-system-url]').value.trim();
+      if (value && !/^https:\/\/script\.google\.com\/.+\/exec$/.test(value.split('?')[0])) { App.toast('ลิงก์ต้องเป็นเว็บแอป Apps Script ที่ลงท้ายด้วย /exec', 'error'); return; }
+      const result = await App.call('settings.update', Object.assign({}, App.state.settings, { systemUrl: value.split('?')[0] }));
+      if (!result.ok) return;
+      App.applyBranding(result.data);
+      App.toast('บันทึกลิงก์แล้ว', 'success');
+      renderMobileCard(box);
+    });
+    const qr = box.querySelector('[data-qr]');
+    if (qr && url) loadQr().then((QRCode) => { if (QRCode) new QRCode(qr, { text: url, width: 132, height: 132, correctLevel: QRCode.CorrectLevel.M }); });
+  }
+
+  let qrPromise = null;
+  App.loadQr = () => loadQr();
+  function loadQr() {
+    if (window.QRCode) return Promise.resolve(window.QRCode);
+    if (!qrPromise) qrPromise = new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+      script.onload = () => resolve(window.QRCode || null);
+      script.onerror = () => resolve(null);
+      document.head.appendChild(script);
+    });
+    return qrPromise;
+  }
+
+  // ---------- โหมดแก้ไขข้อความบนหน้าจอ ----------
+  const pending = {};
+  let editing = false;
+  let bar = null;
+
+  function keyOf(node) { return node.dataset.tkey || (node.dataset.tk ? 's:' + node.dataset.tk : ''); }
+  function defaultOf(key) {
+    const [kind, rest] = [key.slice(0, 1), key.slice(2)];
+    if (kind === 'm') { const module = App.state.modules.find((item) => item.key === rest); return module ? module.defaultName || module.name : ''; }
+    if (kind === 'g') { const group = App.state.groups.find((item) => item.key === rest); return group ? group.defaultName || group.name : ''; }
+    if (kind === 'e') { const entity = App.state.entities[rest]; return entity ? entity.defaultLabel || entity.label : ''; }
+    if (kind === 'f') {
+      const [entityKey, fieldKey] = rest.split('.');
+      const entity = App.state.entities[entityKey];
+      const field = entity && entity.fields.find((item) => item.key === fieldKey);
+      return field ? field.defaultLabel || field.label : '';
+    }
+    if (kind === 's') { const node = document.querySelector(`[data-tk="${CSS.escape(rest)}"]`); return node ? node.dataset.tkDefault || node.textContent : ''; }
+    return '';
+  }
+  function currentOf(key) { return Object.prototype.hasOwnProperty.call(pending, key) ? pending[key] : (App.state.texts[key] || ''); }
+
+  function markEditable() {
+    if (!editing) return;
+    document.querySelectorAll('#app-shell [data-tkey], #app-shell [data-tk]').forEach((node) => {
+      node.classList.add('tk-editable');
+      node.setAttribute('title', 'คลิกเพื่อแก้ไขข้อความ');
+    });
+    const note = document.getElementById('page-note');
+    if (note) { note.classList.remove('hidden'); if (!note.textContent.trim()) note.dataset.placeholder = 'คลิกเพื่อเพิ่มคำอธิบายของหน้านี้ (ไม่บังคับ)'; }
+  }
+
+  function setEditing(on) {
+    editing = on;
+    document.body.classList.toggle('text-edit', on);
+    const button = document.getElementById('text-edit-button');
+    if (button) button.classList.toggle('active', on);
+    if (!on) {
+      document.querySelectorAll('.tk-editable').forEach((node) => { node.classList.remove('tk-editable'); node.removeAttribute('title'); });
+      Object.keys(pending).forEach((key) => delete pending[key]);
+      if (bar) { bar.remove(); bar = null; }
+      closePopover();
+      // แสดงหน้าใหม่ด้วยข้อความล่าสุด (ที่บันทึกแล้ว หรือค่าเดิมถ้ากดยกเลิก)
+      App.applyTexts();
+      App.renderNavigation();
+      App.route();
+      return;
+    }
+    bar = document.createElement('div');
+    bar.className = 'tk-bar';
+    bar.innerHTML = `<i class="fa-solid fa-pen-to-square"></i><span data-count>โหมดแก้ไขข้อความ: คลิกข้อความที่มีเส้นประเพื่อแก้</span>
+      <button type="button" class="secondary-button" data-list>รายการทั้งหมด</button>
+      <button type="button" class="secondary-button" data-cancel>ยกเลิก</button>
+      <button type="button" class="primary-button" data-save disabled><i class="fa-solid fa-floppy-disk"></i> บันทึก</button>`;
+    document.body.appendChild(bar);
+    bar.querySelector('[data-cancel]').addEventListener('click', () => setEditing(false));
+    bar.querySelector('[data-save]').addEventListener('click', () => saveTexts(Object.assign({}, pending)).then((ok) => { if (ok) setEditing(false); }));
+    bar.querySelector('[data-list]').addEventListener('click', openTextList);
+    markEditable();
+  }
+
+  function updateBar() {
+    if (!bar) return;
+    const count = Object.keys(pending).length;
+    bar.querySelector('[data-count]').textContent = count ? `แก้แล้ว ${count} รายการ (ยังไม่บันทึก)` : 'โหมดแก้ไขข้อความ: คลิกข้อความที่มีเส้นประเพื่อแก้';
+    bar.querySelector('[data-save]').disabled = !count;
+  }
+
+  async function saveTexts(changes) {
+    if (!Object.keys(changes).length) return true;
+    const result = await App.call('texts.save', { changes });
+    if (!result.ok) return false;
+    App.state.texts = result.data.texts;
+    App.state.settings.uiTexts = result.data.texts;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(App.storageKey('schoolAppState')) || 'null');
+      if (saved && saved.settings) { saved.settings.uiTexts = result.data.texts; sessionStorage.setItem(App.storageKey('schoolAppState'), JSON.stringify(saved)); }
+    } catch (error) { /* ignore */ }
+    App.toast('บันทึกข้อความแล้ว ทุกคนจะเห็นข้อความใหม่เมื่อเปิดหน้าเว็บครั้งถัดไป', 'success');
+    return true;
+  }
+
+  // กล่องแก้ข้อความเล็ก ๆ ใกล้ข้อความที่คลิก
+  let popover = null;
+  function closePopover() { if (popover) { popover.remove(); popover = null; } }
+  function openPopover(node) {
+    closePopover();
+    const key = keyOf(node);
+    if (!key) return;
+    const fallback = defaultOf(key);
+    const long = key.charAt(0) === 'd';
+    popover = document.createElement('div');
+    popover.className = 'tk-popover';
+    popover.innerHTML = `<label>${long ? 'คำอธิบายหน้า' : 'ข้อความ'}${long ? `<textarea rows="3" maxlength="600"></textarea>` : `<input maxlength="200">`}</label>
+      <small class="muted">ค่าเดิม: ${esc(fallback || '(ว่าง)')}</small>
+      <div class="actions"><button type="button" class="ghost-button" data-reset>ใช้ค่าเดิม</button>
+        <button type="button" class="secondary-button" data-close>ยกเลิก</button><button type="button" class="primary-button" data-ok>ตกลง</button></div>`;
+    document.body.appendChild(popover);
+    const input = popover.querySelector('input,textarea');
+    input.value = currentOf(key) || (long ? '' : node.textContent.trim());
+    const rect = node.getBoundingClientRect();
+    const width = Math.min(360, window.innerWidth - 24);
+    popover.style.width = width + 'px';
+    popover.style.left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left)) + 'px';
+    popover.style.top = Math.min(window.innerHeight - 190, rect.bottom + 8) + 'px';
+    input.focus(); input.select();
+    const apply = (value) => {
+      const clean = String(value || '').replace(/\s+/g, ' ').trim();
+      pending[key] = clean === fallback ? '' : clean;
+      if (pending[key] === (App.state.texts[key] || '')) delete pending[key];
+      const shown = clean || (long ? '' : fallback);
+      document.querySelectorAll('[data-tkey], [data-tk]').forEach((other) => { if (keyOf(other) === key) other.textContent = shown; });
+      if (long) { const note = document.getElementById('page-note'); if (note && !shown) note.dataset.placeholder = 'คลิกเพื่อเพิ่มคำอธิบายของหน้านี้ (ไม่บังคับ)'; }
+      updateBar(); closePopover();
+    };
+    popover.querySelector('[data-ok]').addEventListener('click', () => apply(input.value));
+    popover.querySelector('[data-reset]').addEventListener('click', () => apply(fallback));
+    popover.querySelector('[data-close]').addEventListener('click', closePopover);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !long) { event.preventDefault(); apply(input.value); }
+      if (event.key === 'Escape') closePopover();
+    });
+  }
+
+  // ในโหมดแก้ไข: คลิกข้อความ = แก้ไข (ไม่เปิดลิงก์ ไม่พับ/กางหมวดเมนู)
+  document.addEventListener('click', (event) => {
+    if (!editing) return;
+    if (popover && popover.contains(event.target)) return;
+    if (bar && bar.contains(event.target)) return;
+    const node = event.target.closest && event.target.closest('.tk-editable');
+    if (!node) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openPopover(node);
+  }, true);
+
+  // รายการข้อความทั้งหมด (แก้หลายรายการพร้อมกัน รวมถึงชื่อช่องข้อมูลของทุกเมนู)
+  function openTextList() {
+    closePopover();
+    const rows = [];
+    App.state.groups.filter((group) => group.key !== 'top').forEach((group) => rows.push({ key: 'g:' + group.key, section: 'หมวดเมนู', label: group.defaultName || group.name }));
+    App.state.modules.filter((module) => !module.external).forEach((module) => {
+      rows.push({ key: 'm:' + module.key, section: 'ชื่อเมนู', label: module.defaultName || module.name });
+      rows.push({ key: 'd:' + module.key, section: 'คำอธิบายใต้ชื่อหน้า', label: 'หน้า ' + (module.defaultName || module.name), long: true });
+    });
+    Object.keys(App.state.entities).forEach((key) => {
+      const entity = App.state.entities[key];
+      if (!App.state.modules.some((module) => module.key === entity.module)) return;
+      rows.push({ key: 'e:' + key, section: 'หัวตาราง', label: entity.defaultLabel || entity.label });
+      entity.fields.filter((field) => !field.hidden).forEach((field) => rows.push({ key: 'f:' + key + '.' + field.key, section: 'ชื่อช่อง · ' + (entity.defaultLabel || entity.label), label: field.defaultLabel || field.label }));
+    });
+    document.querySelectorAll('[data-tk]').forEach((node) => rows.push({ key: 's:' + node.dataset.tk, section: 'ข้อความทั่วไป', label: node.dataset.tkDefault || node.textContent }));
+    const body = App.openModal('ข้อความในระบบ', `<p class="muted">แก้ชื่อเมนู หมวด หัวตาราง ชื่อช่องข้อมูล และคำอธิบายหน้าได้ที่นี่ เว้นว่าง = ใช้ค่าเดิม</p>
+      <div class="toolbar"><label class="grow">ค้นหา<input type="search" data-q placeholder="เช่น นักเรียน, เยี่ยมบ้าน"></label>
+        <label class="check-row"><input type="checkbox" data-changed> เฉพาะที่แก้แล้ว</label></div>
+      <div class="table-wrap text-list"><table class="data-table"><thead><tr><th>ประเภท</th><th>ค่าเดิม</th><th>ข้อความใหม่</th></tr></thead>
+        <tbody>${rows.map((row) => `<tr data-row="${attr((row.section + ' ' + row.label).toLowerCase())}" data-has="${App.state.texts[row.key] ? 1 : 0}">
+          <td><small class="muted">${esc(row.section)}</small></td><td>${esc(row.label)}</td>
+          <td>${row.long ? `<textarea rows="2" maxlength="600" data-key="${attr(row.key)}">${esc(currentOf(row.key))}</textarea>`
+            : `<input maxlength="200" data-key="${attr(row.key)}" value="${attr(currentOf(row.key))}" placeholder="${attr(row.label)}">`}</td></tr>`).join('')}</tbody></table></div>
+      <div class="form-actions"><button type="button" class="secondary-button" data-cancel>ปิด</button><button type="button" class="primary-button" data-save><i class="fa-solid fa-floppy-disk"></i> บันทึกข้อความ</button></div>`);
+    const filter = () => {
+      const q = body.querySelector('[data-q]').value.trim().toLowerCase();
+      const changed = body.querySelector('[data-changed]').checked;
+      body.querySelectorAll('tr[data-row]').forEach((tr) => tr.classList.toggle('hidden', (q && !tr.dataset.row.includes(q)) || (changed && tr.dataset.has !== '1')));
+    };
+    body.querySelector('[data-q]').addEventListener('input', filter);
+    body.querySelector('[data-changed]').addEventListener('change', filter);
+    body.querySelector('[data-cancel]').addEventListener('click', App.closeModal);
+    body.querySelector('[data-save]').addEventListener('click', async () => {
+      const changes = {};
+      body.querySelectorAll('[data-key]').forEach((input) => {
+        const key = input.dataset.key;
+        const value = input.value.replace(/\s+/g, ' ').trim();
+        if (value !== (App.state.texts[key] || '')) changes[key] = value;
+      });
+      if (!Object.keys(changes).length) { App.closeModal(); return; }
+      if (await saveTexts(changes)) {
+        App.closeModal();
+        if (editing) setEditing(false);
+        else { App.applyTexts(); App.renderNavigation(); App.route(); }
+      }
+    });
+  }
+  App.openTextList = openTextList;
+
+  // ปุ่มบนแถบด้านบน: แสดงเฉพาะผู้มีสิทธิ์แก้ไขข้อความ
+  const previousAfterRoute = App.afterRoute;
+  App.afterRoute = (module) => {
+    if (previousAfterRoute) previousAfterRoute(module);
+    const button = document.getElementById('text-edit-button');
+    if (button) button.classList.toggle('hidden', !App.can('texts.edit'));
+    if (editing) markEditable();
+  };
+  document.addEventListener('DOMContentLoaded', () => {
+    const button = document.getElementById('text-edit-button');
+    if (button) button.addEventListener('click', () => setEditing(!editing));
+  });
+  const previousRender = App.renderNavigation;
+  App.renderNavigation = function () { previousRender(); if (editing) markEditable(); };
+})();
+</script>

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="color-scheme" content="light dark">
+  <title>แบบสอบถามเพื่อพัฒนาโรงเรียน</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Prompt:wght@500;600&display=swap">
+  <style>
+    :root {
+      --bg: #eef2f7; --paper: #ffffff; --ink: #16243a; --ink-2: #4b5a70; --line: #d5dde8; --field: #f6f8fb;
+      --accent: #1e3a5f; --accent-soft: #e3eaf4; --on-accent: #ffffff; --good: #15803d; --warn: #b45309; --bad: #b42335; --bad-soft: #fde8eb; --focus: #1a5fd0;
+      --s1: #fee2e2; --s2: #ffedd5; --s3: #fef9c3; --s4: #dcfce7; --s5: #bbf7d0;
+      --ui: 'IBM Plex Sans Thai', 'Noto Sans Thai', Tahoma, sans-serif; --head: 'Prompt', 'IBM Plex Sans Thai', Tahoma, sans-serif;
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1724; --paper: #172234; --ink: #e6edf7; --ink-2: #a3b1c6; --line: #2c3a50; --field: #121c2b;
+        --accent: #8fb4ea; --accent-soft: #1f2f48; --on-accent: #0b1422; --good: #5fd08a; --warn: #f0b45a; --bad: #ff8d9c; --bad-soft: #3b1d25; --focus: #9cc0ff;
+        --s1: #4a2026; --s2: #4a3020; --s3: #45401c; --s4: #1d3d2a; --s5: #1f4d31;
+        color-scheme: dark;
+      }
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; }
+    body { background: var(--bg); color: var(--ink); font: 16px/1.65 var(--ui); -webkit-text-size-adjust: 100%; padding-bottom: 32px; }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    .wrap { width: min(680px, 100%); margin: 0 auto; padding: 0 16px; }
+    h1, h2 { font-family: var(--head); font-weight: 600; line-height: 1.3; }
+    .top { padding: 22px 0 4px; }
+    .school { color: var(--ink-2); font-size: .92rem; margin: 0; }
+    h1 { font-size: 1.6rem; margin: 2px 0 6px; }
+    .lead { margin: 0 0 14px; color: var(--ink-2); }
+    .card { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin: 12px 0; }
+    .card h2 { font-size: 1.12rem; margin: 0 0 4px; display: flex; gap: 10px; align-items: center; }
+    .n { flex: none; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); font-size: .92rem; }
+    .hint { color: var(--ink-2); margin: 0 0 10px; font-size: .92rem; }
+    .groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+    .groups label { position: relative; }
+    .groups input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+    .groups span { display: block; text-align: center; padding: 12px 8px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--field); font-weight: 600; }
+    .groups input:checked + span { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    .groups input:focus-visible + span, .scale input:focus-visible + span { outline: 3px solid var(--focus); outline-offset: 2px; }
+    /* แถบความคืบหน้าติดด้านบน */
+    .progress { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px); padding: 10px 0 8px; }
+    .progress-row { display: flex; justify-content: space-between; font-size: .88rem; color: var(--ink-2); margin-bottom: 4px; }
+    .bar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; }
+    .bar span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .25s ease; }
+    .q { padding: 14px 0; border-top: 1px solid var(--line); }
+    .q:first-of-type { border-top: 0; }
+    .q p { margin: 0 0 8px; font-weight: 500; }
+    .q .num { color: var(--ink-2); font-weight: 600; margin-right: 4px; }
+    .sub { font-size: .86rem; color: var(--ink-2); margin: 6px 0 4px; font-weight: 600; }
+    /* มาตรวัด 1–5: ปุ่มใหญ่กดง่ายบนมือถือ สีอ่อนไล่จากน้อยไปมาก */
+    .scale { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+    .scale label { position: relative; }
+    .scale input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+    .scale span { display: grid; place-items: center; height: 46px; border-radius: 11px; border: 1.5px solid var(--line); background: var(--field); font-weight: 600; font-size: 1.05rem; }
+    .scale label:nth-child(1) input:checked + span { background: var(--s1); }
+    .scale label:nth-child(2) input:checked + span { background: var(--s2); }
+    .scale label:nth-child(3) input:checked + span { background: var(--s3); }
+    .scale label:nth-child(4) input:checked + span { background: var(--s4); }
+    .scale label:nth-child(5) input:checked + span { background: var(--s5); }
+    .scale input:checked + span { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .ends { display: flex; justify-content: space-between; font-size: .78rem; color: var(--ink-2); margin-top: 3px; }
+    .q.missing .scale span { border-color: var(--bad); }
+    textarea { width: 100%; border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--field); resize: vertical; }
+    textarea:focus { outline: 3px solid var(--focus); outline-offset: 1px; }
+    .trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+    .send { width: 100%; border: 0; border-radius: 14px; padding: 14px; background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 1.08rem; cursor: pointer; }
+    .send:disabled { opacity: .6; cursor: wait; }
+    .send:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    .alert { background: var(--bad-soft); color: var(--bad); border-radius: 12px; padding: 10px 14px; margin: 10px 0; font-weight: 500; }
+    .done { text-align: center; padding: 28px 16px; }
+    .done .mark { width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 10px; display: grid; place-items: center; background: var(--s4); color: var(--good); font-size: 2rem; }
+    .meta { color: var(--ink-2); font-size: .86rem; text-align: center; margin-top: 18px; }
+    @media (prefers-reduced-motion: reduce) { .bar span { transition: none; } }
+  </style>
+  <?!= include('ScriptsGuard'); ?>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <p class="school" id="school"></p>
+      <h1>ร่วมกำหนดทิศทางโรงเรียนของเรา</h1>
+      <p class="lead" id="lead"></p>
+    </header>
+    <main id="app"></main>
+    <p class="meta" id="credit"></p>
+  </div>
+  <script>
+    const boot = <?!= boot ?>;
+    const $ = (selector) => document.querySelector(selector);
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    if (/^#[0-9a-f]{6}$/i.test(boot.primaryColor || '') && !matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.style.setProperty('--accent', boot.primaryColor);
+
+    let device = '';
+    try { device = localStorage.getItem('sw-device') || ''; if (device.length < 8) { device = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); localStorage.setItem('sw-device', device); } } catch (error) { /* ไม่เป็นไร */ }
+    if (device.length < 8) device = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const openedAt = Date.now();
+    const state = { group: '', answers: {}, busy: false };
+
+    function api(action, data) {
+      return new Promise((resolve) => {
+        google.script.run
+          .withSuccessHandler((response) => resolve(response || { ok: false, error: { message: 'ไม่ได้รับข้อมูลจากเซิร์ฟเวอร์ กรุณาลองใหม่' } }))
+          .withFailureHandler(() => resolve({ ok: false, error: { message: 'ติดต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่' } }))
+          .api({ action, data: Object.assign({ device }, data), tenant: boot.tenant || '' });
+      });
+    }
+
+    $('#school').textContent = boot.schoolName + (boot.year ? ' · ปีการศึกษา ' + boot.year : '');
+    $('#lead').textContent = boot.intro || 'โรงเรียนขอความคิดเห็นของท่านเพื่อนำไปจัดทำแผนพัฒนาคุณภาพการศึกษา ไม่ต้องระบุชื่อ ใช้เวลาประมาณ 10 นาที';
+    $('#credit').textContent = (boot.credit && boot.credit.text) || '';
+
+    const visible = (item) => !item.a.length || item.a.includes(state.group);
+    const issues = () => boot.issues.filter(visible);
+    const needs = () => boot.needs.filter(visible);
+    const keys = () => issues().map((item) => 'r-' + item.id).concat(...needs().map((item) => ['d-' + item.id, 'i-' + item.id]));
+    const scale = (name, left, right, label) => `<div class="scale" role="radiogroup" aria-label="${esc(label)}">${[1, 2, 3, 4, 5].map((n) =>
+      `<label><input type="radio" name="${esc(name)}" value="${n}" ${state.answers[name] === n ? 'checked' : ''} aria-label="${esc(label)} ระดับ ${n}"><span>${n}</span></label>`).join('')}</div>
+      <div class="ends" aria-hidden="true"><span>${esc(left)}</span><span>${esc(right)}</span></div>`;
+
+    function paint() {
+      if (!boot.open) {
+        $('#app').innerHTML = `<section class="card"><h2>${boot.expired ? 'ปิดรับแบบสอบถามแล้ว' : 'ยังไม่เปิดรับแบบสอบถาม'}</h2>
+          <p class="hint" style="margin:0">${boot.expired ? 'ขอบคุณที่สนใจร่วมพัฒนาโรงเรียน' : 'โรงเรียนจะแจ้งเมื่อเปิดรับความคิดเห็น'}</p></section>`;
+        return;
+      }
+      const groupCard = `<section class="card"><h2><span class="n">1</span> ท่านตอบในฐานะ</h2><p class="hint">เลือก 1 ข้อ คำถามจะปรับให้ตรงกับกลุ่มของท่าน</p>
+        <div class="groups" role="radiogroup" aria-label="กลุ่มผู้ตอบ">${boot.groups.map((name) => `<label><input type="radio" name="group" value="${esc(name)}" ${state.group === name ? 'checked' : ''}><span>${esc(name)}</span></label>`).join('')}</div></section>`;
+      if (!state.group) { $('#app').innerHTML = groupCard; bind(); return; }
+      const one = issues();
+      const two = needs();
+      let number = 0;
+      $('#app').innerHTML = `${groupCard}
+        <div class="progress" aria-live="polite"><div class="progress-row"><span>ตอบแล้ว <b id="count">0</b> จาก ${keys().length} ช่อง</span><span id="percent">0%</span></div><div class="bar"><span id="bar"></span></div></div>
+        <form id="form" novalidate autocomplete="off">
+          <div id="alert"></div>
+          ${one.length ? `<section class="card"><h2><span class="n">2</span> เรื่องเหล่านี้มีผลต่อโรงเรียนมากน้อยเพียงใด</h2>
+            <p class="hint">1 = น้อยที่สุด · 5 = มากที่สุด</p>
+            ${one.map((item) => `<div class="q" data-q="r-${esc(item.id)}"><p><span class="num">${++number}.</span>${esc(item.q)}</p>${scale('r-' + item.id, 'น้อยที่สุด', 'มากที่สุด', item.q)}</div>`).join('')}</section>` : ''}
+          ${two.length ? `<section class="card"><h2><span class="n">${one.length ? 3 : 2}</span> ตอนนี้เป็นอย่างไร และควรเป็นแค่ไหน</h2>
+            <p class="hint">ให้คะแนน 2 ครั้งต่อข้อ: สภาพที่เป็นอยู่ตอนนี้ และสภาพที่ท่านอยากให้เป็น (1 = น้อยที่สุด · 5 = มากที่สุด)</p>
+            ${two.map((item) => `<div class="q" data-q="d-${esc(item.id)} i-${esc(item.id)}"><p><span class="num">${++number}.</span>${esc(item.q)}</p>
+              <div class="sub">ตอนนี้เป็นอยู่</div>${scale('d-' + item.id, 'น้อยที่สุด', 'มากที่สุด', item.q + ' ตอนนี้')}
+              <div class="sub">ควรจะเป็น</div>${scale('i-' + item.id, 'น้อยที่สุด', 'มากที่สุด', item.q + ' ควรจะเป็น')}</div>`).join('')}</section>` : ''}
+          <section class="card"><h2><span class="n">${(one.length ? 1 : 0) + (two.length ? 1 : 0) + 2}</span> ข้อเสนอแนะ (ไม่บังคับ)</h2>
+            <textarea name="comment" rows="3" maxlength="500" aria-label="ข้อเสนอแนะ" placeholder="อยากให้โรงเรียนพัฒนาเรื่องใดเป็นพิเศษ"></textarea>
+            <label class="trap" aria-hidden="true">เว็บไซต์<input name="website" tabindex="-1" autocomplete="off"></label></section>
+          <button type="submit" class="send" id="send">ส่งแบบสอบถาม</button>
+        </form>`;
+      bind();
+      update();
+    }
+
+    function update() {
+      const all = keys();
+      const done = all.filter((key) => state.answers[key]).length;
+      const count = $('#count');
+      if (!count) return;
+      count.textContent = done;
+      const percent = all.length ? Math.round(done * 100 / all.length) : 0;
+      $('#percent').textContent = percent + '%';
+      $('#bar').style.width = percent + '%';
+    }
+
+    function bind() {
+      document.querySelectorAll('[name=group]').forEach((input) => input.addEventListener('change', () => { state.group = input.value; paint(); }));
+      const form = $('#form');
+      if (!form) return;
+      form.addEventListener('change', (event) => {
+        if (event.target.type !== 'radio') return;
+        state.answers[event.target.name] = Number(event.target.value);
+        const box = event.target.closest('.q');
+        if (box && box.dataset.q.split(' ').every((key) => state.answers[key])) box.classList.remove('missing');
+        update();
+      });
+      form.addEventListener('submit', submit);
+    }
+
+    async function submit(event) {
+      event.preventDefault();
+      if (state.busy) return;
+      const form = event.target;
+      const alert = $('#alert');
+      alert.innerHTML = '';
+      const missing = [...document.querySelectorAll('.q')].filter((box) => !box.dataset.q.split(' ').every((key) => state.answers[key]));
+      missing.forEach((box) => box.classList.add('missing'));
+      if (missing.length) {
+        alert.innerHTML = `<p class="alert" role="alert">ยังตอบไม่ครบ ${missing.length} ข้อ (ข้อที่ขาดมีกรอบสีแดง)</p>`;
+        missing[0].scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
+        return;
+      }
+      const ratings = {};
+      const needAnswers = {};
+      issues().forEach((item) => { ratings[item.id] = state.answers['r-' + item.id]; });
+      needs().forEach((item) => { needAnswers[item.id] = { d: state.answers['d-' + item.id], i: state.answers['i-' + item.id] }; });
+      state.busy = true;
+      const button = $('#send');
+      button.disabled = true;
+      button.textContent = 'กำลังส่ง…';
+      const response = await api('swot.publicSubmit', { respondentType: state.group, ratings, needs: needAnswers, comment: form.elements.comment.value,
+        website: form.elements.website.value, elapsed: Date.now() - openedAt });
+      state.busy = false;
+      if (!response.ok) {
+        button.disabled = false;
+        button.textContent = 'ส่งแบบสอบถาม';
+        alert.innerHTML = `<p class="alert" role="alert">${esc(response.error && response.error.message || 'ส่งไม่สำเร็จ กรุณาลองใหม่')}</p>`;
+        alert.scrollIntoView({ block: 'center' });
+        return;
+      }
+      window.scrollTo(0, 0);
+      $('#app').innerHTML = `<section class="card done" role="status"><div class="mark" aria-hidden="true">✓</div><h2 style="justify-content:center">ขอบคุณสำหรับความคิดเห็น</h2>
+        <p class="hint" style="margin:0">${response.data.updated ? 'ระบบปรับคำตอบเดิมของท่านเป็นคำตอบล่าสุดแล้ว' : 'โรงเรียนได้รับคำตอบของท่านแล้ว'} ความคิดเห็นนี้จะนำไปใช้จัดทำแผนพัฒนาคุณภาพการศึกษา</p></section>`;
+    }
+
+    paint();
+  </script>
+</body>
+</html>
