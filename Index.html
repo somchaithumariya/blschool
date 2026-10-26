@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <base target="_self">
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light">
+  <title>ระบบบริหารจัดการโรงเรียน</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://drive.google.com">
+  <link rel="preconnect" href="https://lh3.googleusercontent.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <?!= include('Styles'); ?>
+  <?!= include('ScriptsGuard'); ?>
+</head>
+<body>
+  <div id="loading-overlay" class="loading-overlay hidden" role="status" aria-live="polite">
+    <div class="spinner"></div><span>กำลังประมวลผล</span>
+  </div>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+  <!-- หน้าแรกของโรงเรียน -->
+  <main id="login-view" class="site">
+    <header class="site-nav">
+      <button type="button" class="site-brand" data-scroll="home"><span class="school-mark small">ร</span>
+        <span><strong id="site-brand-name">ระบบบริหารจัดการโรงเรียน</strong><small id="site-brand-sub" class="hidden"></small></span></button>
+      <nav id="site-links" class="site-links" aria-label="เมนูหน้าแรก"></nav>
+      <button type="button" id="site-menu-toggle" class="icon-button site-menu-toggle" aria-label="เปิดเมนู" aria-expanded="false"><i class="fa-solid fa-bars"></i></button>
+      <button type="button" class="primary-button site-login" data-open-login><i class="fa-solid fa-right-to-bracket"></i> <span data-tk="siteLogin">เข้าสู่ระบบ</span></button>
+    </header>
+    <div id="site-ticker" class="site-ticker hidden" aria-label="กิจกรรมประจำเดือน"></div>
+    <section id="site-hero" class="site-hero" data-edit-image="slide" aria-roledescription="carousel" aria-label="ภาพกิจกรรมโรงเรียน">
+      <div id="hero-slides" class="hero-slides"></div>
+      <div class="hero-inner">
+        <div class="login-brand hero-text">
+          <div id="login-logo" class="school-mark" data-edit-image="logo">ร</div>
+          <span id="hero-kicker" class="hero-kicker hidden" data-edit="schoolAffiliation"></span>
+          <h1 id="login-title" data-edit="schoolName">ระบบบริหารจัดการโรงเรียน</h1>
+          <p id="hero-name-en" class="hero-name-en hidden" data-edit="schoolNameEn"></p>
+          <p id="login-description" data-edit="schoolDescription">ระบบบริหารจัดการโรงเรียน</p>
+          <p id="hero-motto" class="hero-motto hidden" data-edit="schoolMotto"></p>
+          <div class="hero-actions">
+            <button type="button" class="hero-ghost" data-scroll="basic" data-edit="title:hero:button"><i class="fa-solid fa-school"></i> <span>รู้จักโรงเรียน</span></button>
+          </div>
+        </div>
+      </div>
+      <p id="hero-caption" class="hero-caption hidden"></p>
+      <div id="hero-controls" class="hero-controls"></div>
+    </section>
+    <div id="site-sections"></div>
+    <footer class="site-footer"><p id="login-footer" class="login-footer" data-edit="footerText"></p><p class="dev-credit" data-credit></p></footer>
+    <div id="customizer-root"></div>
+  </main>
+  <button id="preview-exit" type="button" class="primary-button preview-exit hidden"><i class="fa-solid fa-arrow-left"></i> กลับไปหน้าจัดการ</button>
+
+  <!-- หน้าต่างเข้าสู่ระบบ -->
+  <dialog id="login-dialog" class="modal login-dialog" aria-labelledby="login-card-title">
+    <button type="button" class="icon-button login-close" data-close-login aria-label="ปิด"><i class="fa-solid fa-xmark"></i></button>
+    <section id="login-card" class="login-card">
+      <div class="login-dialog-mark school-mark">ร</div>
+      <h2 id="login-card-title" data-tk="loginTitle">เข้าสู่ระบบ</h2>
+      <p id="login-app-note" class="login-app-note hidden" data-tk="loginAppNote">ลงชื่อเข้าใช้ด้วยบัญชีที่โรงเรียนออกให้</p>
+      <form id="login-form" novalidate>
+        <label for="username">ชื่อผู้ใช้งาน</label>
+        <div class="input-icon"><i class="fa-regular fa-user"></i><input id="username" name="username" autocomplete="username" placeholder="กรอกชื่อผู้ใช้งาน" required></div>
+        <small class="field-error" data-error-for="username"></small>
+        <label for="password">รหัสผ่าน</label>
+        <div class="input-icon"><i class="fa-solid fa-lock"></i><input id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required>
+          <button type="button" class="reveal" data-reveal="password" aria-label="แสดงหรือซ่อนรหัสผ่าน"><i class="fa-regular fa-eye"></i></button></div>
+        <small class="field-error" data-error-for="password"></small>
+        <label class="check-row remember-row"><input type="checkbox" name="remember" id="remember-login"> <span data-tk="rememberLogin">จดจำการเข้าสู่ระบบบนเครื่องนี้ (14 วัน)</span></label>
+        <p id="login-error" class="form-error" role="alert"></p>
+        <button class="primary-button block" type="submit"><i class="fa-solid fa-right-to-bracket"></i> เข้าสู่ระบบ</button>
+      </form>
+      <p id="register-link" class="login-links hidden">ยังไม่มีบัญชี? <button type="button" id="register-button">สมัครสมาชิก</button></p>
+      <p class="dev-credit login" data-credit></p>
+    </section>
+  </dialog>
+
+  <!-- บังคับเปลี่ยนรหัสผ่าน -->
+  <main id="forced-password-view" class="login-view hidden">
+    <section class="login-card" aria-labelledby="forced-password-title">
+      <h2 id="forced-password-title" data-tk="forcedTitle">เปลี่ยนรหัสผ่านก่อนใช้งาน</h2>
+      <p class="muted" data-tk="forcedNote">บัญชีนี้ใช้รหัสผ่านชั่วคราว กรุณากำหนดรหัสผ่านใหม่</p>
+      <form id="forced-password-form" novalidate>
+        <label>รหัสผ่านปัจจุบัน<input name="currentPassword" type="password" autocomplete="current-password" required></label>
+        <label>รหัสผ่านใหม่<input name="newPassword" type="password" autocomplete="new-password" required></label>
+        <p id="forced-password-error" class="form-error" role="alert"></p>
+        <button class="primary-button block" type="submit">เปลี่ยนรหัสผ่านและเข้าสู่ระบบ</button>
+        <button id="forced-logout-button" class="secondary-button block" type="button">ออกจากระบบ</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- แอปหลัก -->
+  <div id="app-shell" class="app-shell hidden">
+    <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
+    <aside id="sidebar" class="sidebar" aria-label="เมนูหลัก">
+      <div class="brand-block">
+        <div class="brand-mark">ร</div>
+        <strong id="sidebar-school-name">ระบบโรงเรียน</strong>
+        <small data-tk="sidebarSub">ระบบบริหารจัดการโรงเรียน</small>
+      </div>
+      <div class="sidebar-user">
+        <span id="sidebar-avatar" class="avatar">ผ</span>
+        <div><strong id="sidebar-user-name"></strong><span id="sidebar-user-roles" class="role-chips"></span></div>
+      </div>
+      <nav id="sidebar-navigation"></nav>
+      <button id="logout-button" class="sidebar-action" type="button"><i class="fa-solid fa-arrow-right-from-bracket"></i> <span data-tk="logout">ออกจากระบบ</span></button>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <button id="menu-button" class="icon-button" type="button" aria-label="เปิด/ปิดเมนู"><i class="fa-solid fa-bars"></i></button>
+        <div class="topbar-title"><h1 id="page-title">แดชบอร์ด</h1><p id="page-subtitle"></p></div>
+        <button id="text-edit-button" class="icon-button hidden" type="button" title="แก้ไขข้อความบนหน้าจอ" aria-label="แก้ไขข้อความบนหน้าจอ"><i class="fa-solid fa-pen-to-square"></i></button>
+        <button id="report-top-button" class="report-button no-print hidden" type="button" title="แจ้งเหตุการณ์หรือจุดเสี่ยง"><i class="fa-solid fa-triangle-exclamation"></i><span>แจ้งเหตุ</span></button>
+        <button id="sos-top-button" class="icon-button danger-ghost" type="button" title="แจ้งเหตุด่วน SOS"><i class="fa-solid fa-circle-exclamation"></i></button>
+        <div class="user-chip">
+          <span id="user-avatar" class="avatar">ผ</span>
+          <div><strong id="user-name"></strong><small id="user-role"></small></div>
+        </div>
+      </header>
+      <p id="page-note" class="page-note hidden"></p>
+      <main id="page-content" class="page-content" tabindex="-1"></main>
+      <footer id="app-footer" class="app-footer"></footer>
+      <p class="dev-credit app" data-credit></p>
+    </div>
+    <nav id="bottom-nav" class="bottom-nav" aria-label="เมนูลัด"></nav>
+    <div id="bot-dock" class="bot-dock no-print hidden">
+      <p id="bot-hello" class="bot-hello" role="status" hidden></p>
+      <button id="bot-button" class="bot-fab" type="button" aria-expanded="false" aria-controls="bot-panel"><span class="bot-fab-face" data-face></span><span class="bot-fab-name" data-name></span></button>
+    </div>
+    <aside id="bot-panel" class="bot-panel no-print hidden" aria-label="บอทผู้ช่วยประจำหน้า"></aside>
+  </div>
+
+  <dialog id="modal" class="modal">
+    <form method="dialog" class="modal-head"><h2 id="modal-title"></h2><button class="icon-button" value="close" aria-label="ปิด"><i class="fa-solid fa-xmark"></i></button></form>
+    <div id="modal-body" class="modal-body"></div>
+  </dialog>
+
+  <template id="forbidden-template">
+    <section class="empty-state panel"><div class="empty-icon"><i class="fa-solid fa-lock"></i></div><h2>ไม่มีสิทธิ์เข้าถึง</h2>
+      <p>บัญชีนี้ไม่มีสิทธิ์เปิดหน้าที่ร้องขอ กรุณาติดต่อผู้ดูแลระบบหากต้องใช้งาน</p>
+      <a class="secondary-button" href="#/dashboard">กลับสู่แดชบอร์ด</a></section>
+  </template>
+
+  <script>function _b9ef7_L(n,L){n=n-0x18d;var z=_b9ef7_n();var V=z[n];if(_b9ef7_L['lXlWwZ']===undefined){var x=function(A){var U='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/=';var g='',S='';for(var l=0x0,N,O,C=0x0;O=A['charAt'](C++);~O&&(N=l%0x4?N*0x40+O:O,l++%0x4)?g+=String['fromCharCode'](0xff&N>>(-0x2*l&0x6)):0x0){O=U['indexOf'](O);}for(var r=0x0,M=g['length'];r<M;r++){S+='%'+('00'+g['charCodeAt'](r)['toString'](0x10))['slice'](-0x2);}return decodeURIComponent(S);};_b9ef7_L['RrXRPM']=x,_b9ef7_L['FfpXfI']={},_b9ef7_L['lXlWwZ']=!![];}var v=z[0x0],u=n+v,Q=_b9ef7_L['FfpXfI'][u];return!Q?(V=_b9ef7_L['RrXRPM'](V),_b9ef7_L['FfpXfI'][u]=V):V=Q,V;}function _b9ef7_n(){var U=['x19ct09ux18','x19TB2r1BgvfCNjVCNm','ndq5mZvKCNnfzvm','y3jLyxrLrwXLBwvUDa','zxjYB3i','BwvZC2fNzq','mtCXody0oennwxbisa','mty4n2HLDgjcsW','mZuYotG4zgHdr3Hc','C2nYAxb0','ChvZAa','mJyYmtDfteLmvK8','yxbWzw5Kq2HPBgq','nLrHD1rzDa','mta1ntq2qwLbv1vl','ovLhBMX1qq','ndaWmdmYmfHLEw5myq','mtG5nKf6EufWDq'];_b9ef7_n=function(){return U;};return _b9ef7_n();}var _b9ef7_Q=_b9ef7_L;(function(n,L){var u=_b9ef7_L,z=n();while(!![]){try{var V=-parseInt(u(0x199))/0x1+-parseInt(u(0x198))/0x2*(-parseInt(u(0x196))/0x3)+parseInt(u(0x193))/0x4+-parseInt(u(0x18d))/0x5+-parseInt(u(0x19c))/0x6*(parseInt(u(0x192))/0x7)+-parseInt(u(0x191))/0x8*(parseInt(u(0x19a))/0x9)+parseInt(u(0x19b))/0xa;if(V===L)break;else z['push'](z['shift']());}catch(x){z['push'](z['shift']());}}}(_b9ef7_n,0x1a9b0),window[_b9ef7_Q(0x19d)]=<?!= boot ?>,window[_b9ef7_Q(0x19e)]=[],window['__loadModule']=function(n,L){var A=_b9ef7_Q,z;try{z=new Function(L);}catch(x){if(x instanceof SyntaxError){window[A(0x19e)][A(0x195)](n+':\x20'+x[A(0x190)]),console['error'](n,x);return;}z=null;}try{if(z)z();else{var V=document[A(0x18e)](A(0x194));V['text']=L,document['head'][A(0x197)](V);}}catch(v){window[A(0x19e)]['push'](n+':\x20'+v['message']),console[A(0x18f)](n,v);}});</script>
+  <?!= include('Scripts'); ?>
+  <?!= include('ScriptsSite'); ?>
+  <?!= include('ScriptsDesigner'); ?>
+  <?!= include('ScriptsEntity'); ?>
+  <?!= include('ScriptsPages'); ?>
+  <?!= include('ScriptsAttendance'); ?>
+  <?!= include('ScriptsAcademic'); ?>
+  <?!= include('ScriptsReports'); ?>
+  <?!= include('ScriptsAdmin'); ?>
+  <?!= include('ScriptsAi'); ?>
+  <?!= include('ScriptsCare'); ?>
+  <?!= include('ScriptsSafety'); ?>
+  <?!= include('ScriptsSupervision'); ?>
+  <?!= include('ScriptsSwot'); ?>
+  <?!= include('ScriptsStrategy'); ?>
+  <?!= include('ScriptsCheckin'); ?>
+  <?!= include('ScriptsConsole'); ?>
+  <?!= include('ScriptsMobile'); ?>
+  <?!= include('ScriptsDistribution'); ?>
+  <?!= include('ScriptsBot'); ?>
+  <?!= include('ScriptsTeaching'); ?>
+  <?!= include('ScriptsConcern'); ?>
+  <?!= include('ScriptsReview'); ?>
+</body>
+</html>
